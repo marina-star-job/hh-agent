@@ -1,0 +1,21 @@
+name: HH Agent
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install hh-applicant-tool
+        run: pip install hh-applicant-tool
+
+      - name: Write config
+        run: |
+          mkdir -p ~/.config/hh-applicant-tool
+          echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
+
+      - name: Update resumes
+        run: hh-applicant-tool update-resumes

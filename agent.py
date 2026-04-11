@@ -1,6 +1,5 @@
 import os
 import requests
-import json
 
 HH_TOKEN = os.environ['HH_ACCESS_TOKEN']
 GPT_TOKEN = os.environ['GPT_MODELS_TOKEN']
@@ -124,15 +123,15 @@ def main():
 
             detail = get_vacancy_detail(v['id'])
 
-           if is_relevant(detail):
-    print(f"✅ Подходит: {v['name']} — {v.get('employer', {}).get('name', '')}")
-    if detail.get('response_letter_required'):
-        print(f"✉️ Письмо обязательно — пишем...")
-        letter = write_cover_letter(detail)
-    else:
-        print(f"📨 Письмо не обязательно — откликаемся без письма")
-        letter = ""
-    status = apply(v['id'], resume_id, letter)
+            if is_relevant(detail):
+                print(f"✅ Подходит: {v['name']} — {v.get('employer', {}).get('name', '')}")
+                if detail.get('response_letter_required'):
+                    print(f"✉️ Письмо обязательно — пишем...")
+                    letter = write_cover_letter(detail)
+                else:
+                    print(f"📨 Письмо не обязательно — откликаемся без письма")
+                    letter = ""
+                status = apply(v['id'], resume_id, letter)
                 if status in [200, 201]:
                     print(f"📨 Отклик отправлен!")
                     applied.append(f"{v['name']} — {v.get('employer', {}).get('name', '')}")

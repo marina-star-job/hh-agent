@@ -48,7 +48,11 @@ def ask_gpt(system, user):
         "max_tokens": 1000
     }
     r = requests.post(url, headers=headers, json=body)
-    return r.json()["choices"][0]["message"]["content"]
+    result = r.json()
+    if "choices" not in result:
+        print(f"⚠️ GPT ответил неожиданно: {result}")
+        return "НЕТ"
+    return result["choices"][0]["message"]["content"]
 
 def is_relevant(vacancy):
     system = """Ты помогаешь искать работу. Оцени подходит ли вакансия кандидату.

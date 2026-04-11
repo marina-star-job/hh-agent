@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 
 HH_TOKEN = os.environ['HH_ACCESS_TOKEN']
 GPT_TOKEN = os.environ['GPT_MODELS_TOKEN']
@@ -48,6 +49,7 @@ def ask_gpt(system, user):
         "max_tokens": 1000
     }
     r = requests.post(url, headers=headers, json=body)
+    time.sleep(3)
     result = r.json()
     if "choices" not in result:
         print(f"⚠️ GPT ответил неожиданно: {result}")

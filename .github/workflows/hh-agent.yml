@@ -9,13 +9,25 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Install hh-applicant-tool
-        run: pip install hh-applicant-tool
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Write config
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Write hh config
         run: |
           mkdir -p ~/.config/hh-applicant-tool
           echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
 
+      - name: Install hh-applicant-tool
+        run: pip install hh-applicant-tool
+
       - name: Update resumes
         run: hh-applicant-tool update-resumes
+
+      - name: Run agent
+        env:
+          HH_ACCESS_TOKEN: ${{ secrets.HH_ACCESS_TOKEN }}
+          GPT_MODELS_TOKEN: ${{ secrets.GPT_MODELS_TOKEN }}
+        run: python agent.py

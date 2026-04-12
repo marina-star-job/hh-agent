@@ -32,4 +32,6 @@ jobs:
         env:
           HH_ACCESS_TOKEN: ${{ secrets.HH_ACCESS_TOKEN }}
           GPT_MODELS_TOKEN: ${{ secrets.GPT_MODELS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python agent.py

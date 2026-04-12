@@ -13,17 +13,27 @@ REPO = os.environ['GITHUB_REPOSITORY']
 PROFILE = open('profile.md', 'r', encoding='utf-8').read()
 
 SEARCHES = [
+    # Широкие запросы по роли
     "Product Manager",
     "Project Manager",
-    "Руководитель AI проекта",
-    "AI Project Manager",
-    "ML Project Manager",
-    "Руководитель проекта AI",
     "Руководитель проектов",
+    "Руководитель продукта",
+    "Менеджер продукта",
+    "Владелец продукта",
     "Product Owner",
-    "PM AI",
-    "PM ML",
-    "PM финтех",
+    # AI/ML направление
+    "руководитель AI",
+    "руководитель ML",
+    "AI менеджер",
+    "ML менеджер",
+    "AI Project",
+    "ML Project",
+    # Финтех и банки
+    "Product Manager банк",
+    "Project Manager финтех",
+    # IT продукты
+    "Product Manager IT",
+    "Project Manager IT",
 ]
 
 APPLIED_FILE = "applied_ids.json"

@@ -13,11 +13,13 @@ REPO = os.environ['GITHUB_REPOSITORY']
 PROFILE = open('profile.md', 'r', encoding='utf-8').read()
 
 SEARCHES = [
-    "Руководитель проектов IT",
-    "Project Manager IT",
-    "Product Manager IT",
+    "Product Manager",
+    "Project Manager",
+    "Руководитель проектов",
+    "Product Owner",
+    "PM AI",
     "PM ML",
-    "PM NLP",
+    "PM финтех",
 ]
 
 APPLIED_FILE = "applied_ids.json"
@@ -90,14 +92,31 @@ def ask_gpt(system, user):
     return result["choices"][0]["message"]["content"]
 
 def is_relevant(vacancy):
-    system = """Ты помогаешь искать работу. Оцени подходит ли вакансия кандидату.
+    system = """Ты помогаешь искать работу для кандидата уровня Middle PM / Project Manager с опытом 3-5 лет.
+
+Оцени подходит ли вакансия по следующим критериям:
+
+ПОДХОДИТ если:
+- Уровень: middle, senior, lead (но не C-level: CPO, CTO, VP, Director)
+- Роль: Product Manager, Project Manager, Руководитель проектов, Product Owner, Scrum Master
+- Направление: IT, AI/ML, финтех, банки, e-commerce, SaaS и другие продуктовые компании
+- Требования соответствуют опыту 3-5 лет
+- Город Москва или другая страна
+
+НЕ ПОДХОДИТ если:
+- C-level позиции: CPO, CTO, VP of Product, Director, Head of (крупного департамента)
+- Требуют 7+ лет опыта
+- Это не IT/продуктовая роль: продажи, маркетинг, дизайн, разработка
+- Стажировка или junior уровень
+
 Ответь ТОЛЬКО одним словом: ДА или НЕТ."""
+
     user = f"""Профиль кандидата:
 {PROFILE}
 
-Вакансия:
-{vacancy['name']}
-{vacancy.get('description', '')[:2000]}
+Вакансия: {vacancy['name']}
+Компания: {vacancy.get('employer', {}).get('name', '')}
+Требования: {vacancy.get('description', '')[:3000]}
 
 Подходит ли эта вакансия кандидату?"""
     answer = ask_gpt(system, user)

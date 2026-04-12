@@ -15,6 +15,10 @@ PROFILE = open('profile.md', 'r', encoding='utf-8').read()
 SEARCHES = [
     "Product Manager",
     "Project Manager",
+    "Руководитель AI проекта",
+    "AI Project Manager",
+    "ML Project Manager",
+    "Руководитель проекта AI",
     "Руководитель проектов",
     "Product Owner",
     "PM AI",
@@ -88,7 +92,7 @@ def ask_gpt(system, user):
     result = r.json()
     if "choices" not in result:
         print(f"⚠️ GPT ответил неожиданно: {result}")
-        return "НЕТ"
+        return "ПРОПУСТИТЬ"
     return result["choices"][0]["message"]["content"]
 
 def is_relevant(vacancy):
@@ -120,6 +124,9 @@ def is_relevant(vacancy):
 
 Подходит ли эта вакансия кандидату?"""
     answer = ask_gpt(system, user)
+    if "ПРОПУСТИТЬ" in answer.upper():
+        print(f"⏳ Лимит GPT — пропускаем вакансию, вернёмся позже")
+        return False
     return "ДА" in answer.upper()
 
 def write_cover_letter(vacancy):

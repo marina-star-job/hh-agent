@@ -84,7 +84,7 @@ def ask_gpt(system, user):
         "max_tokens": 1000
     }
     r = requests.post(url, headers=headers, json=body)
-    time.sleep(3)
+    time.sleep(7)
     result = r.json()
     if "choices" not in result:
         print(f"⚠️ GPT ответил неожиданно: {result}")

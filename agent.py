@@ -1,9 +1,14 @@
 import os
 import requests
 import time
+import json
+import base64
+from datetime import datetime
 
 HH_TOKEN = os.environ['HH_ACCESS_TOKEN']
 GPT_TOKEN = os.environ['GPT_MODELS_TOKEN']
+GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
+REPO = os.environ['GITHUB_REPOSITORY']
 
 PROFILE = open('profile.md', 'r', encoding='utf-8').read()
 
@@ -15,12 +20,40 @@ SEARCHES = [
     "PM NLP",
 ]
 
+APPLIED_FILE = "applied_ids.json"
+
+def get_applied_ids():
+    url = f"https://api.github.com/repos/{REPO}/contents/{APPLIED_FILE}"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"}
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        content = r.json()["content"]
+        sha = r.json()["sha"]
+        data = json.loads(base64.b64decode(content).decode())
+        return data, sha
+    return [], None
+
+def save_applied_ids(ids, sha):
+    url = f"https://api.github.com/repos/{REPO}/contents/{APPLIED_FILE}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    content = base64.b64encode(json.dumps(ids).encode()).decode()
+    body = {
+        "message": f"Update applied ids {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "content": content
+    }
+    if sha:
+        body["sha"] = sha
+    requests.put(url, headers=headers, json=body)
+
 def get_vacancies(search):
     url = "https://api.hh.ru/vacancies"
     params = {
         "text": search,
         "area": 1,
-        "period": 1,
+        "period": 7,
         "per_page": 10,
         "order_by": "publication_time",
     }
@@ -83,7 +116,7 @@ def write_cover_letter(vacancy):
 7. НЕЛЬЗЯ добавлять скобки с личными комментариями
 8. НЕЛЬЗЯ добавлять контакты — телефон, email
 9. Письмо заканчивай ВСЕГДА так: "С уважением, Марина. тг @Marina_Usckova"
-10. Письмо — максимум 2 абзаца, чётко и по делу
+10. Письмо — максимум 3 абзаца, чётко и по делу
 11. Пиши от первого лица, на русском языке"""
 
     user = f"""Профиль кандидата:
@@ -125,6 +158,7 @@ def main():
         print("Резюме не найдено!")
         return
 
+    applied_ids, sha = get_applied_ids()
     applied = []
     skipped = []
     seen_ids = set()
@@ -135,6 +169,9 @@ def main():
 
         for v in vacancies:
             if v['id'] in seen_ids:
+                continue
+            if v['id'] in applied_ids:
+                print(f"⏭️ Уже откликались: {v['name']}")
                 continue
             seen_ids.add(v['id'])
 
@@ -151,12 +188,15 @@ def main():
                 status = apply(v['id'], resume_id, letter)
                 if status in [200, 201]:
                     print(f"📨 Отклик отправлен!")
+                    applied_ids.append(v['id'])
                     applied.append(f"{v['name']} — {v.get('employer', {}).get('name', '')}")
                 else:
                     print(f"⚠️ Ошибка отклика: {status}")
             else:
                 print(f"❌ Не подходит: {v['name']}")
                 skipped.append(v['name'])
+
+    save_applied_ids(applied_ids, sha)
 
     print("\n📊 ИТОГ:")
     print(f"Откликнулся: {len(applied)}")

@@ -228,6 +228,9 @@ def main():
             seen_ids.add(v['id'])
 
             detail = get_vacancy_detail(v['id'])
+            if not detail or 'name' not in detail:
+               print(f"⚠️ Не удалось получить детали вакансии, пропускаем")
+               continue
 
             if is_relevant(detail):
                 print(f"✅ Подходит: {v['name']} — {v.get('employer', {}).get('name', '')}")

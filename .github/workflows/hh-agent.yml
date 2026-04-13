@@ -26,4 +26,5 @@ jobs:
           GPT_MODELS_TOKEN: ${{ secrets.GPT_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python agent.py

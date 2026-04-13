@@ -74,14 +74,26 @@ def get_vacancies(search):
         "order_by": "publication_time",
     }
     headers = {"Authorization": f"Bearer {HH_TOKEN}"}
-    r = requests.get(url, params=params, headers=headers)
-    return r.json().get("items", [])
+    for i in range(3):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+            return r.json().get("items", [])
+        except Exception as e:
+            print(f"⚠️ Ошибка запроса к hh.ru: {e}, попытка {i+1}/3")
+            time.sleep(5)
+    return []
 
 def get_vacancy_detail(vacancy_id):
     url = f"https://api.hh.ru/vacancies/{vacancy_id}"
     headers = {"Authorization": f"Bearer {HH_TOKEN}"}
-    r = requests.get(url, headers=headers)
-    return r.json()
+    for i in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            return r.json()
+        except Exception as e:
+            print(f"⚠️ Ошибка запроса к hh.ru: {e}, попытка {i+1}/3")
+            time.sleep(5)
+    return {}
 
 def ask_gpt(system, user):
     url = "https://api.openai.com/v1/chat/completions"

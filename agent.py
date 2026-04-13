@@ -227,6 +227,7 @@ def main():
                 continue
             seen_ids.add(v['id'])
 
+            time.sleep(1)
             detail = get_vacancy_detail(v['id'])
             if not detail or 'name' not in detail:
                print(f"⚠️ Не удалось получить детали вакансии, пропускаем")

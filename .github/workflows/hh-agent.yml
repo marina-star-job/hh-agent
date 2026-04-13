@@ -2,28 +2,12 @@ name: HH Agent
 
 on:
   schedule:
-    - cron: '0 6,10,14,18 * * *'
     - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
-  update_resumes:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install hh-applicant-tool
-        run: pip install hh-applicant-tool
-
-      - name: Write hh config
-        run: |
-          mkdir -p ~/.config/hh-applicant-tool
-          echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
-
-      - name: Update resumes
-        run: hh-applicant-tool update-resumes
-
   run_agent:
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 7 * * *'
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4

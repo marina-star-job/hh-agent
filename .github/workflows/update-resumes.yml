@@ -1,0 +1,24 @@
+name: Update Resumes
+
+on:
+  schedule:
+    - cron: '0 6,10,14,18 * * *'
+  workflow_dispatch:
+
+jobs:
+  update_resumes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install hh-applicant-tool
+        run: pip install hh-applicant-tool
+
+      - name: Write hh config
+        run: |
+          mkdir -p ~/.config/hh-applicant-tool
+          echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
+
+      - name: Update resumes
+        run: |
+          for i in 1 2 3; do
+            hh-applicant-tool update-resumes && break || sleep 10
+          done

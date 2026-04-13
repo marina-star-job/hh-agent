@@ -84,13 +84,13 @@ def get_vacancy_detail(vacancy_id):
     return r.json()
 
 def ask_gpt(system, user):
-    url = "https://models.inference.ai.azure.com/chat/completions"
+    url = "https://api.openai.com/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {GPT_TOKEN}",
+        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
         "Content-Type": "application/json"
     }
     body = {
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
@@ -98,7 +98,7 @@ def ask_gpt(system, user):
         "max_tokens": 1000
     }
     r = requests.post(url, headers=headers, json=body)
-    time.sleep(7)
+    time.sleep(2)
     result = r.json()
     if "choices" not in result:
         print(f"⚠️ GPT ответил неожиданно: {result}")

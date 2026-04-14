@@ -10,7 +10,7 @@ GPT_TOKEN = os.environ['GPT_MODELS_TOKEN']
 GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
 REPO = os.environ['GITHUB_REPOSITORY']
 
-PROFILE = open('profile.md', 'r', encoding='utf-8').read()
+PROFILE = os.environ.get('PROFILE', '')
 
 SEARCHES = [
     # Широкие запросы по роли

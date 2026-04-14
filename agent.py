@@ -89,10 +89,10 @@ def get_vacancy_detail(vacancy_id):
     for i in range(3):
         try:
             r = requests.get(url, headers=headers, timeout=30)
+            print(f"⚠️ hh.ru ответил: {r.status_code} {r.text[:300]}")
             return r.json()
         except Exception as e:
-            r = requests.get(url, headers=headers, timeout=30)
-            print(f"⚠️ hh.ru ответил: {r.status_code} {r.text[:200]}")
+            print(f"⚠️ Ошибка соединения: {e}, попытка {i+1}/3")
             time.sleep(5)
     return {}
 

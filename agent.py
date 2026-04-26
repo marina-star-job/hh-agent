@@ -826,7 +826,7 @@ def main():
                     "tier": classification['tier'],
                     "reason": classification['reason']
                 })
-
+        time.sleep(2)
     save_applied_ids(applied_ids, sha)
 
     # ============================================================

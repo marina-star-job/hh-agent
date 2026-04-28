@@ -1,5 +1,6 @@
 import os
 import re
+import random
 import requests
 import time
 import json
@@ -16,9 +17,6 @@ PROFILE = os.environ.get('PROFILE', '')
 
 # ============================================================
 # Компактный профиль для классификатора is_relevant.
-# Полный PROFILE используется в write_cover_letter (там нужен контекст).
-# Для классификации хватает 500-800 символов с ключевыми сигналами —
-# это экономит токены (на каждый прогон сотни LLM-вызовов).
 # ============================================================
 CANDIDATE_PROFILE = """
 Кандидат: ML/AI Project Manager, женщина, 32 года, Москва.
@@ -53,90 +51,84 @@ Hard NO:
   - C-level в крупных корпорациях (CPO, CTO, VP, Director)
 """.strip()
 
-# Порог match_score, начиная с которого откликаемся.
 RELEVANCE_THRESHOLD = 6
 
-# Параметры воронки (top of the funnel).
-MAX_PAGES = 2          # сколько страниц hh обходим на каждый search query
-PER_PAGE = 100         # потолок hh API на одну страницу
+# ============================================================
+# Параметры воронки.
+# Снижены после инцидента с captcha_required от hh anti-fraud.
+# ============================================================
+MAX_PAGES = 1          # было 2; режет list-запросы вдвое
+PER_PAGE = 100         # потолок hh API
+SEARCH_PERIOD_DAYS = 2 # было 7; берём только свежие, дубликатов меньше
 
+# ============================================================
+# Sleeps подняты для снижения burstiness (всплесков частоты запросов).
+# Стоимость: прогон станет ~60-90 минут вместо 45.
+# Польза: hh anti-fraud не триггерится.
+# ============================================================
+SLEEP_BETWEEN_SEARCHES = 5      # было 2
+SLEEP_BETWEEN_PAGES = 2         # было 0.5
+SLEEP_BEFORE_DETAIL = 1.5       # было 1
+SLEEP_AFTER_GPT = 1             # после успешного LLM-вызова
+
+
+# ============================================================
+# SEARCHES сокращены с 17 до 9.
+# Раньше пересекающиеся query генерили 27% дубликатов
+# (782 duplicates на 2902 fetched). Убраны:
+#   - "AI Project" / "ML Project" / "AI менеджер" / "ML менеджер" —
+#     дублировали "руководитель AI/ML"
+#   - "Product Manager IT" / "банк" / "Project Manager финтех" —
+#     subset'ы "Product Manager" / "Project Manager"
+#   - "Менеджер продукта" — дубль "Product Manager" на русском
+# ============================================================
 SEARCHES = [
-    # Широкие запросы по роли
     "Product Manager",
     "Project Manager",
     "Руководитель проектов",
     "Руководитель продукта",
-    "Менеджер продукта",
-    "Владелец продукта",
     "Product Owner",
-    # AI/ML направление
+    "Владелец продукта",
     "руководитель AI",
     "руководитель ML",
-    "AI менеджер",
-    "ML менеджер",
-    "AI Project",
-    "ML Project",
-    # Финтех и банки
-    "Product Manager банк",
-    "Project Manager финтех",
-    # IT продукты
-    "Product Manager IT",
-    "Project Manager IT",
+    "AI Product",
 ]
 
 APPLIED_FILE = "applied_ids.json"
 
+
 # ============================================================
-# Company blacklist — компании, на которые не откликаемся.
-# Срабатывает первым в воронке (Stage 0) — до гео, до префильтра,
-# до LLM. Самая дешёвая отсечка: проверка подстроки в employer.name.
-#
-# Паттерны case-insensitive substring match. Подстрока "рсхб" ловит
-# все дочки (РСХБ-Интех, РСХБ-Страхование) — broad match by design.
+# Custom exception для circuit breaker'а на captcha.
+# ============================================================
+class CaptchaRequiredError(Exception):
+    """hh anti-fraud потребовал капчу. Прерываем прогон, сохраняем state."""
+    pass
+
+
+# ============================================================
+# Company blacklist.
 # ============================================================
 COMPANY_BLACKLIST = [
-    "россельхозбанк",   # ловит "АО Россельхозбанк", 'АО "Россельхозбанк"'
-    "рсхб",             # ловит "РСХБ", "РСХБ-Интех", "РСХБ-Страхование"
+    "россельхозбанк",
+    "рсхб",
 ]
 
 
 def company_filter(vacancy):
-    """Stage 0: отсев по работодателю.
-
-    Returns:
-        ("pass", None) — компания не в blacklist
-        ("reject", reason) — попала в blacklist
-    """
     employer = vacancy.get("employer", {}) or {}
     employer_name = (employer.get("name") or "").strip()
-
     if not employer_name:
         return "pass", None
-
     employer_lower = employer_name.lower()
     for pattern in COMPANY_BLACKLIST:
         if pattern in employer_lower:
             return "reject", f"company: {employer_name}"
-
     return "pass", None
 
 
 # ============================================================
-# Гео-фильтр: где работа допустима.
-#
-# Правило: Москва ИЛИ ближнее МО (де-факто Москва) ИЛИ зарубежье.
-# Дальнее Подмосковье и другие регионы РФ — reject.
-#
-# Реализация: hh API в area.name отдаёт конкретный город. Москва
-# определяется по подстроке "москва". Регионы РФ определяются через
-# blacklist (RUSSIAN_REGIONS_BLACKLIST). Всё, что не в blacklist
-# и не Москва — считаем зарубежьем.
-#
-# Это hybrid filter — детерминированный сигнал (город) проверяем
-# в коде, не в LLM.
+# Гео-фильтр: Москва + ближнее МО + зарубежье. РФ-регионы — reject.
 # ============================================================
-
-# Ближнее МО — фактически часть Москвы, оставляем.
 NEAR_MOSCOW_REGION = [
     "химки", "реутов", "мытищи", "балашиха",
     "королёв", "королев",
@@ -146,10 +138,7 @@ NEAR_MOSCOW_REGION = [
     "железнодорожный",
 ]
 
-# Регионы РФ кроме Москвы и ближнего МО — режем.
-# Включает крупные города + дальнее Подмосковье.
 RUSSIAN_REGIONS_BLACKLIST = [
-    # Дальнее МО
     "московская область", "подмосковье",
     "подольск", "серпухов", "клин",
     "сергиев посад", "раменское", "жуковский",
@@ -157,8 +146,6 @@ RUSSIAN_REGIONS_BLACKLIST = [
     "ногинск", "электросталь", "орехово-зуево",
     "пушкино", "щёлково", "щелково",
     "звенигород", "коломна", "наро-фоминск",
-
-    # Крупные города РФ
     "санкт-петербург", "спб", "питер",
     "новосибирск", "екатеринбург", "нижний новгород",
     "казань", "челябинск", "омск", "самара",
@@ -195,49 +182,25 @@ RUSSIAN_REGIONS_BLACKLIST = [
 
 
 def geo_filter(vacancy):
-    """Гео-фильтр: Москва + ближнее МО + зарубежье — pass.
-    Дальнее Подмосковье и регионы РФ — reject.
-
-    Returns:
-        ("pass", None) — гео подходит
-        ("reject", reason) — режем по гео
-    """
     area = vacancy.get("area", {}) or {}
     area_name = (area.get("name") or "").strip()
-
-    # Если area не указана — пропускаем (LLM разберётся по описанию).
     if not area_name:
         return "pass", None
-
     area_lower = area_name.lower()
-
-    # Москва (включая "Москва, метро ...") — всегда ОК.
-    # Зеленоград формально часть Москвы, попадёт сюда автоматически.
     if "москва" in area_lower:
         return "pass", None
-
-    # Ближнее МО — whitelist, ОК.
     for city in NEAR_MOSCOW_REGION:
         if city in area_lower:
             return "pass", None
-
-    # Регионы РФ и дальнее МО — reject.
     for region in RUSSIAN_REGIONS_BLACKLIST:
         if region in area_lower:
             return "reject", f"регион РФ: {area_name}"
-
-    # Не Москва, не известный регион РФ — считаем зарубежьем, ОК.
     return "pass", None
 
 
 # ============================================================
-# Префильтр по тайтлу — дешёвая отсечка перед дорогой LLM.
-# Паттерн ML system design: cheap filter → expensive model.
-# Экономит ~40-60% LLM-вызовов на типичной выборке.
+# Префильтр по тайтлу.
 # ============================================================
-
-# Whitelist — явно наша роль. Fast-track в LLM (LLM нужна для нюансов
-# грейда/стека/корпорации vs стартапа, но префильтр здесь не режет).
 TITLE_WHITELIST = [
     r"\bproduct manager\b",
     r"\bproject manager\b",
@@ -251,15 +214,13 @@ TITLE_WHITELIST = [
     r"\bscrum master\b",
     r"\bруководитель\s+(проектов|продукта|продуктов)\b",
     r"\bменеджер\s+(проектов|продукта|продуктов)\b",
-    r"\bменеджер\s+\w+\s+проектов\b",   # "менеджер количественных проектов"
-    r"\bпродакт[\s-]?менеджер\b",        # "Продакт-менеджер" через дефис
+    r"\bменеджер\s+\w+\s+проектов\b",
+    r"\bпродакт[\s-]?менеджер\b",
     r"\bвладелец\s+продукта\b",
     r"\bml\s+менеджер\b",
     r"\bai\s+менеджер\b",
 ]
 
-# Blacklist — hard NO по тайтлу. Режем БЕЗ LLM-вызова.
-# Blacklist имеет приоритет над whitelist.
 TITLE_BLACKLIST = [
     r"\b1с\b",
     r"\bback[\s-]?end\b",
@@ -272,7 +233,7 @@ TITLE_BLACKLIST = [
     r"\bразработчик\b",
     r"\bпрограммист\b",
     r"\bинженер\b",
-    r"\bаналитик\b(?!\s+проектов)",   # "Аналитик", но НЕ "Аналитик проектов"
+    r"\bаналитик\b(?!\s+проектов)",
     r"\bдизайнер\b",
     r"\bарт[\s-]?директор\b",
     r"\bui[/\s]ux\b",
@@ -298,29 +259,33 @@ TITLE_BLACKLIST = [
 
 
 def prefilter_by_title(title):
-    """Дешёвая отсечка по заголовку до LLM.
-
-    Returns:
-        ("fast_track", None) — явно наша роль, отправляем в LLM
-        ("reject", reason)   — явный hard NO, режем без LLM
-        ("pass", None)       — серая зона, отправляем в LLM
-    """
     title_lower = title.lower()
-
-    # Blacklist первым — приоритет над whitelist.
     for pattern in TITLE_BLACKLIST:
         if re.search(pattern, title_lower):
             return "reject", f"blacklist: {pattern}"
-
-    # Затем whitelist — fast-track для явно своих ролей.
     for pattern in TITLE_WHITELIST:
         if re.search(pattern, title_lower):
             return "fast_track", None
-
-    # Серая зона — не уверены, отдаём LLM.
     return "pass", None
 
 
+# ============================================================
+# Captcha detection — общая утилита.
+# Любой ответ, содержащий "captcha_required", — сигнал прерывать прогон.
+# ============================================================
+def is_captcha_response(response_text):
+    """Проверяет, содержит ли ответ hh captcha challenge."""
+    if not response_text:
+        return False
+    return "captcha_required" in response_text
+
+
+# ============================================================
+# applied_ids — incremental save.
+# Раньше save был один в конце main(). Если прогон падал в середине
+# (как на капче), все накопленные ID терялись.
+# Теперь сохраняем после каждого нового отклика.
+# ============================================================
 def get_applied_ids():
     url = f"https://api.github.com/repos/{REPO}/contents/{APPLIED_FILE}"
     headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"}
@@ -334,6 +299,7 @@ def get_applied_ids():
 
 
 def save_applied_ids(ids, sha):
+    """Сохраняет applied_ids в репо. Возвращает новый sha."""
     url = f"https://api.github.com/repos/{REPO}/contents/{APPLIED_FILE}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -346,22 +312,24 @@ def save_applied_ids(ids, sha):
     }
     if sha:
         body["sha"] = sha
-    requests.put(url, headers=headers, json=body)
+    r = requests.put(url, headers=headers, json=body)
+    if r.status_code in [200, 201]:
+        return r.json()["content"]["sha"]
+    print(f"⚠️ Не удалось сохранить applied_ids.json: {r.status_code} {r.text[:200]}")
+    return sha
 
 
+# ============================================================
+# hh API клиенты с retry + exponential backoff + captcha detection.
+# ============================================================
 def get_vacancies(search):
-    """Получаем вакансии с pagination, без geo-фильтра в API.
-
-    MAX_PAGES страниц по PER_PAGE=100 = до 200 вакансий на один query.
-    Без area — ищем по всем регионам РФ + ближнее зарубежье + удалёнка.
-    Гео-фильтрация делается в коде через geo_filter().
-    """
+    """Получаем вакансии с pagination."""
     all_items = []
     for page in range(MAX_PAGES):
         url = "https://api.hh.ru/vacancies"
         params = {
             "text": search,
-            "period": 7,
+            "period": SEARCH_PERIOD_DAYS,
             "per_page": PER_PAGE,
             "page": page,
             "order_by": "publication_time",
@@ -372,41 +340,78 @@ def get_vacancies(search):
         for attempt in range(3):
             try:
                 r = requests.get(url, params=params, headers=headers, timeout=30)
-                page_items = r.json().get("items", [])
-                break
+
+                if is_captcha_response(r.text):
+                    raise CaptchaRequiredError(
+                        f"captcha при get_vacancies(search='{search}', page={page})"
+                    )
+
+                if r.status_code == 200:
+                    page_items = r.json().get("items", [])
+                    break
+
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"⚠️ hh.ru {r.status_code} (search='{search}', page={page}), "
+                      f"ретрай {attempt+1}/3 через {wait:.1f}с")
+                time.sleep(wait)
+
+            except CaptchaRequiredError:
+                raise
             except Exception as e:
-                print(f"⚠️ Ошибка hh.ru (search='{search}', page={page}): {e}, попытка {attempt+1}/3")
-                time.sleep(5)
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"⚠️ Ошибка hh.ru: {e}, ретрай {attempt+1}/3 через {wait:.1f}с")
+                time.sleep(wait)
 
         all_items.extend(page_items)
 
         if len(page_items) < PER_PAGE:
             break
 
-        time.sleep(0.5)
+        time.sleep(SLEEP_BETWEEN_PAGES)
 
     return all_items
 
 
 def get_vacancy_detail(vacancy_id):
+    """Детали вакансии с retry на 4xx/5xx и captcha detection."""
     url = f"https://api.hh.ru/vacancies/{vacancy_id}"
     headers = {"Authorization": f"Bearer {HH_TOKEN}"}
-    for i in range(3):
+
+    for attempt in range(3):
         try:
             r = requests.get(url, headers=headers, timeout=30)
-            if r.status_code != 200:
-                print(f"⚠️ hh.ru ответил: {r.status_code} {r.text[:300]}")
-            return r.json()
+
+            if is_captcha_response(r.text):
+                raise CaptchaRequiredError(
+                    f"captcha при get_vacancy_detail({vacancy_id})"
+                )
+
+            if r.status_code == 200:
+                return r.json()
+
+            if r.status_code in (404, 410):
+                return {}
+
+            wait = (2 ** attempt) + random.uniform(0, 1)
+            print(f"⚠️ hh.ru detail {r.status_code} для {vacancy_id}, "
+                  f"ретрай {attempt+1}/3 через {wait:.1f}с")
+            time.sleep(wait)
+
+        except CaptchaRequiredError:
+            raise
         except Exception as e:
-            print(f"⚠️ Ошибка соединения: {e}, попытка {i+1}/3")
-            time.sleep(5)
+            wait = (2 ** attempt) + random.uniform(0, 1)
+            print(f"⚠️ Соединение detail: {e}, ретрай {attempt+1}/3 через {wait:.1f}с")
+            time.sleep(wait)
+
     return {}
 
 
+# ============================================================
+# OpenAI API клиенты.
+# ============================================================
 def ask_gpt(system, user):
-    """GPT-вызов в свободном текстовом режиме.
-    Используется в write_cover_letter — там нужен живой текст, не JSON.
-    """
+    """GPT-вызов в свободном режиме (для cover letter)."""
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
@@ -430,14 +435,7 @@ def ask_gpt(system, user):
 
 
 def ask_gpt_json(system, user, max_retries=3):
-    """LLM-вызов с гарантированным JSON output для классификатора.
-
-    response_format={"type": "json_object"} — модель обязана вернуть
-    валидный JSON. Без этого флага gpt-4o-mini иногда оборачивает
-    ответ в ```json``` или добавляет преамбулу — типичный production-pitfall.
-
-    Retry с exponential backoff (1s → 2s → 4s) на сетевых ошибках и 429.
-    """
+    """LLM-вызов с гарантированным JSON output."""
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
@@ -460,7 +458,7 @@ def ask_gpt_json(system, user, max_retries=3):
 
             if r.status_code == 429:
                 wait = 2 ** attempt
-                print(f"⏳ Rate limit, ждём {wait}с (попытка {attempt+1}/{max_retries})")
+                print(f"⏳ OpenAI rate limit, ждём {wait}с")
                 time.sleep(wait)
                 continue
 
@@ -475,26 +473,20 @@ def ask_gpt_json(system, user, max_retries=3):
                 time.sleep(2 ** attempt)
                 continue
 
-            time.sleep(1)
+            time.sleep(SLEEP_AFTER_GPT)
             return result["choices"][0]["message"]["content"]
 
         except requests.exceptions.RequestException as e:
-            print(f"⚠️ Сетевая ошибка GPT: {e}, попытка {attempt+1}/{max_retries}")
+            print(f"⚠️ Сетевая ошибка GPT: {e}, ретрай {attempt+1}/{max_retries}")
             time.sleep(2 ** attempt)
 
     return '{"decision": "no", "match_score": 0, "tier": "api_error", "concerns": ["API failure"], "reason": "API недоступен после 3 попыток"}'
 
 
+# ============================================================
+# LLM-классификатор.
+# ============================================================
 def is_relevant(vacancy):
-    """Троичная классификация: yes / maybe / no + match_score 0-10.
-
-    Гео-фильтрация и company-фильтрация уже сделаны в коде —
-    здесь LLM работает только с ролью/доменом/стеком.
-
-    Возвращает (is_match: bool, classification: dict).
-    is_match=True если match_score >= RELEVANCE_THRESHOLD.
-    """
-
     system = """Ты — ассистент, помогающий ML/AI Project Manager оценивать релевантность вакансий с hh.ru.
 
 Твоя задача — для каждой вакансии вернуть СТРОГО валидный JSON с оценкой релевантности.
@@ -506,95 +498,72 @@ def is_relevant(vacancy):
 
 === КАК ОЦЕНИВАТЬ ===
 
-Шаг 1. Определи tier (уровень соответствия домена):
-  - "tier_1": вакансия про AI / ML / NLP / LLM / RAG / GenAI / Computer Vision
+Шаг 1. Определи tier:
+  - "tier_1": AI / ML / NLP / LLM / RAG / GenAI / Computer Vision
   - "tier_2": HR-tech, IT/SaaS, продуктовые компании, цифровая трансформация
   - "tier_3": финтех, банки, EdTech, e-commerce, прочий IT
-  - "out_of_scope": не IT или роль из hard NO списка
+  - "out_of_scope": не IT или роль из hard NO
 
-Шаг 2. Проверь hard NO признаки. Если хотя бы один срабатывает — decision="no", score=0-2:
-  - роль про 1С (1С-аналитик, 1С-архитектор, 1С-разработчик, 1С-консультант)
-  - роль про чистые продажи / sales / аккаунт-менеджмент
-  - роль про дизайн (арт-директор, дизайн-лид, UX/UI-лид)
-  - роль про чистую разработку (Backend/Frontend/Data Engineer/DevOps без PM-функций)
-  - HR-роли (HR BP, HRD, T&D, рекрутер, HR-директор)
+Шаг 2. Hard NO признаки → decision="no", score=0-2:
+  - 1С (любые роли)
+  - чистые продажи / sales / аккаунт-менеджмент
+  - дизайн / арт-директор / UX-lead
+  - чистая разработка (Backend/Frontend/Data Engineer/DevOps)
+  - HR-роли (HR BP, HRD, T&D, рекрутер)
   - маркетинг / SMM / контент-менеджер
   - стажировка / junior / trainee
-  - C-level (CPO/CTO/VP/Director) в крупной корпорации (банк, телеком, ритейл-гигант)
+  - C-level в крупной корпорации
 
-Шаг 3. Проверь позитивные сигналы:
-  - роль из списка: PM, Product Manager, Project Manager, Product Owner, ML PM, AI PM, Program Manager, Delivery Manager, Scrum Master, Руководитель проектов/продукта
-  - упоминания AI/ML/NLP/LLM/RAG в требованиях или продукте
-  - product/project ownership, работа с requirements, Agile/Scrum
+Шаг 3. Позитивные сигналы:
+  - PM, Product Manager, Project Manager, Product Owner, ML PM, AI PM, Program Manager, Delivery Manager, Scrum Master, Руководитель проектов/продукта
+  - AI/ML/NLP/LLM/RAG в требованиях
+  - product/project ownership, requirements, Agile/Scrum
   - грейд middle / middle+ / senior
 
-Шаг 4. ВАЖНО про lead/head-of роли:
-  - "Head of AI Projects", "COO в AI-стартапе", "Lead PM в небольшой команде" — это OK (decision="yes" или "maybe")
-  - "Head of Product в Сбере", "Director of PMO в крупной корпорации" — это NO
-  - Признаки крупной корпорации: банки топ-20, телеком (МТС/Билайн/Мегафон), ритейл-гиганты (X5/Магнит), госкомпании
-  - Признаки стартапа: маленькая команда, упоминание "стартап", "молодая компания", series A/B/seed
+Шаг 4. Lead/head-of роли:
+  - "Head of AI Projects", "COO в AI-стартапе", "Lead PM в небольшой команде" — OK
+  - "Head of Product в Сбере", "Director of PMO" — NO
+  - крупная корп: банки топ-20, телеком, ритейл-гиганты, госкомпании
 
-Шаг 5. Выстави match_score 0-10:
-  - 9-10: tier_1 (AI/ML/NLP) + middle/senior PM-роль + стартап или продуктовая компания
-  - 7-8: tier_1 (AI/ML) + PM-роль, ИЛИ tier_2 + явная PM-роль с релевантным стеком
-  - 5-6: tier_2/tier_3 + PM-роль, без явных red flags, но домен не идеальный
-  - 3-4: пограничная зона — есть подозрительные признаки, но не явный hard NO
-  - 0-2: hard NO сработал, либо явное несоответствие профилю
+Шаг 5. match_score 0-10:
+  - 9-10: tier_1 + middle/senior PM + стартап/продуктовая
+  - 7-8: tier_1 + PM, ИЛИ tier_2 + явная PM
+  - 5-6: tier_2/tier_3 + PM, без red flags
+  - 3-4: пограничная зона
+  - 0-2: hard NO либо явное несоответствие
 
-Шаг 6. Реши decision:
-  - "yes" — score >= 7
-  - "maybe" — score 5-6
-  - "no" — score <= 4
+Шаг 6. decision: "yes" — score >= 7, "maybe" — 5-6, "no" — <= 4
 
-=== FEW-SHOT ПРИМЕРЫ ===
+=== FEW-SHOT ===
 
 Пример 1:
 Вакансия: "ML Project Manager — внедрение LLM в банке"
-Описание: "Управление проектами по внедрению LLM-решений, NLP, RAG-пайплайны, Agile..."
-Ответ:
-{"decision": "yes", "match_score": 10, "tier": "tier_1", "concerns": [], "reason": "Прямое попадание: ML PM с LLM/RAG в банке — точный матч с текущим опытом кандидата."}
+Ответ: {"decision": "yes", "match_score": 10, "tier": "tier_1", "concerns": [], "reason": "Прямое попадание: ML PM с LLM/RAG в банке."}
 
 Пример 2:
-Вакансия: "COO ИИ / Руководитель проектов в ИИ образовательной сфере / COO AI EdTech"
-Описание: "AI-стартап в EdTech, команда 15 человек, управление продуктовыми и исследовательскими проектами..."
-Ответ:
-{"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": ["Роль COO формально C-level, но в стартапе на 15 человек это операционный руководитель"], "reason": "AI EdTech стартап + руководство проектами — попадает в tier_1 и в зону 'lead в стартапе ОК'."}
+Вакансия: "COO ИИ / Руководитель проектов в ИИ образовательной сфере"
+Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": ["COO формально C-level, но в стартапе на 15 чел. это операционный руководитель"], "reason": "AI EdTech стартап + руководство проектами."}
 
 Пример 3:
 Вакансия: "Аккаунт менеджер / Менеджер проектов (IT)"
-Описание: "Работа с ключевыми клиентами, ведение IT-проектов внедрения..."
-Ответ:
-{"decision": "maybe", "match_score": 5, "tier": "tier_3", "concerns": ["Гибридная роль аккаунт+PM, неясно соотношение продаж и проектного управления"], "reason": "Половина роли — продажи (hard NO), половина — IT PM. Нужен ручной просмотр описания."}
+Ответ: {"decision": "maybe", "match_score": 5, "tier": "tier_3", "concerns": ["Гибрид аккаунт+PM"], "reason": "Половина продажи (hard NO), половина IT PM."}
 
 Пример 4:
-Вакансия: "Ведущий аналитик 1С / Функциональный архитектор 1С"
-Описание: "Разработка и внедрение конфигураций 1С..."
-Ответ:
-{"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Стек 1С — hard NO"], "reason": "1С-направление, не совпадает с LLM/NLP опытом кандидата."}
+Вакансия: "Ведущий аналитик 1С"
+Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Стек 1С — hard NO"], "reason": "1С-направление."}
 
 Пример 5:
 Вакансия: "Product Manager в e-commerce маркетплейс"
-Описание: "Управление продуктом онлайн-маркетплейса, A/B тесты, работа с метриками, средняя команда..."
-Ответ:
-{"decision": "yes", "match_score": 7, "tier": "tier_3", "concerns": [], "reason": "PM-роль в продуктовой компании, есть продуктовые метрики и A/B — релевантно опыту, хотя домен не tier_1."}
+Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_3", "concerns": [], "reason": "PM в продуктовой компании с метриками и A/B."}
 
 Пример 6:
-Вакансия: "Арт-директор (руководитель отдела дизайна)"
-Описание: "Руководство командой дизайнеров, развитие визуального стиля бренда..."
-Ответ:
-{"decision": "no", "match_score": 0, "tier": "out_of_scope", "concerns": ["Дизайн-направление — hard NO"], "reason": "Дизайн-руководство, не соответствует PM/Product/Project профилю."}
+Вакансия: "Арт-директор"
+Ответ: {"decision": "no", "match_score": 0, "tier": "out_of_scope", "concerns": ["Дизайн — hard NO"], "reason": "Дизайн-руководство."}
 
 === ФОРМАТ ОТВЕТА ===
 
-Верни СТРОГО JSON без markdown-обёртки, без пояснений до или после.
-Структура:
-{
-  "decision": "yes" | "maybe" | "no",
-  "match_score": <число от 0 до 10>,
-  "tier": "tier_1" | "tier_2" | "tier_3" | "out_of_scope",
-  "concerns": [<массив строк с потенциальными проблемами, может быть пустым>],
-  "reason": "<одно короткое предложение — почему такое решение>"
-}
+Верни СТРОГО JSON без markdown:
+{"decision": "yes"|"maybe"|"no", "match_score": <0-10>, "tier": "tier_1"|"tier_2"|"tier_3"|"out_of_scope", "concerns": [...], "reason": "..."}
 """
 
     user = f"""Вакансия: {vacancy['name']}
@@ -631,7 +600,6 @@ def is_relevant(vacancy):
         "reason": reason,
         "concerns": concerns
     }
-
     is_match = score >= RELEVANCE_THRESHOLD
     return is_match, classification
 
@@ -669,6 +637,9 @@ def write_cover_letter(vacancy):
     return ask_gpt(system, user)
 
 
+# ============================================================
+# apply() с обработкой 4xx — self-healing на «уже откликались».
+# ============================================================
 def apply(vacancy_id, resume_id, cover_letter):
     url = "https://api.hh.ru/negotiations"
     headers = {
@@ -681,34 +652,57 @@ def apply(vacancy_id, resume_id, cover_letter):
         "message": cover_letter
     }
     r = requests.post(url, headers=headers, data=data)
-    return r.status_code
+
+    if is_captcha_response(r.text):
+        raise CaptchaRequiredError(f"captcha при apply({vacancy_id})")
+
+    already_applied_signals = [
+        "already_applied",
+        "negotiation_exists",
+        "vacancy_negotiation_already_exists",
+        "negotiations_limit_exceeded",
+    ]
+    response_text_lower = r.text.lower()
+    is_already_applied = any(sig in response_text_lower for sig in already_applied_signals)
+
+    return r.status_code, is_already_applied
 
 
 def get_resume_id():
     url = "https://api.hh.ru/resumes/mine"
     headers = {"Authorization": f"Bearer {HH_TOKEN}"}
     r = requests.get(url, headers=headers)
+    if is_captcha_response(r.text):
+        raise CaptchaRequiredError("captcha при get_resume_id")
     resumes = r.json().get("items", [])
     if resumes:
         return resumes[0]["id"]
     return None
 
 
+# ============================================================
+# main — с circuit breaker на CaptchaRequiredError.
+# ============================================================
 def main():
-    resume_id = get_resume_id()
+    try:
+        resume_id = get_resume_id()
+    except CaptchaRequiredError as e:
+        print(f"🛑 {e}")
+        print("🛑 hh заблокировал на этапе get_resume_id. Прогон прерван.")
+        return 1
+
     if not resume_id:
         print("Резюме не найдено!")
-        return
+        return 1
 
     applied_ids, sha = get_applied_ids()
     applied = []
-    skipped_by_llm = []         # отклонённые LLM (с classification dict)
-    skipped_by_prefilter = []   # отклонённые префильтром
-    skipped_by_geo = []         # отклонённые гео-фильтром
-    skipped_by_company = []     # отклонённые company-фильтром
+    skipped_by_llm = []
+    skipped_by_prefilter = []
+    skipped_by_geo = []
+    skipped_by_company = []
     seen_ids = set()
 
-    # Funnel counters — observability воронки.
     funnel = {
         "fetched_total": 0,
         "duplicates_in_search": 0,
@@ -723,118 +717,131 @@ def main():
         "llm_approved": 0,
         "applied_success": 0,
         "applied_failed": 0,
+        "applied_already": 0,
     }
 
-    for search in SEARCHES:
-        print(f"\n🔍 Ищем: {search}")
-        vacancies = get_vacancies(search)
-        funnel["fetched_total"] += len(vacancies)
+    captcha_hit = False
 
-        for v in vacancies:
-            if v['id'] in seen_ids:
-                funnel["duplicates_in_search"] += 1
-                continue
-            if v['id'] in applied_ids:
-                funnel["already_applied"] += 1
-                continue
-            seen_ids.add(v['id'])
+    try:
+        for search in SEARCHES:
+            print(f"\n🔍 Ищем: {search}")
+            vacancies = get_vacancies(search)
+            funnel["fetched_total"] += len(vacancies)
 
-            # === Stage 0: company blacklist (самый дешёвый фильтр) ===
-            company_result, company_reason = company_filter(v)
-            if company_result == "reject":
-                funnel["company_rejected"] += 1
-                skipped_by_company.append({
-                    "name": v['name'],
-                    "employer": v.get('employer', {}).get('name', ''),
-                    "reason": company_reason
-                })
-                continue
+            for v in vacancies:
+                if v['id'] in seen_ids:
+                    funnel["duplicates_in_search"] += 1
+                    continue
+                if v['id'] in applied_ids:
+                    funnel["already_applied"] += 1
+                    continue
+                seen_ids.add(v['id'])
 
-            # === Stage 1: гео-фильтр ===
-            geo_result, geo_reason = geo_filter(v)
-            if geo_result == "reject":
-                funnel["geo_rejected"] += 1
-                skipped_by_geo.append({
-                    "name": v['name'],
-                    "area": v.get('area', {}).get('name', ''),
-                    "reason": geo_reason
-                })
-                continue
+                company_result, company_reason = company_filter(v)
+                if company_result == "reject":
+                    funnel["company_rejected"] += 1
+                    skipped_by_company.append({
+                        "name": v['name'],
+                        "employer": v.get('employer', {}).get('name', ''),
+                        "reason": company_reason
+                    })
+                    continue
 
-            # === Stage 2: prefilter по тайтлу ===
-            prefilter_result, prefilter_reason = prefilter_by_title(v['name'])
+                geo_result, geo_reason = geo_filter(v)
+                if geo_result == "reject":
+                    funnel["geo_rejected"] += 1
+                    skipped_by_geo.append({
+                        "name": v['name'],
+                        "area": v.get('area', {}).get('name', ''),
+                        "reason": geo_reason
+                    })
+                    continue
 
-            if prefilter_result == "reject":
-                funnel["prefilter_rejected"] += 1
-                skipped_by_prefilter.append({
-                    "name": v['name'],
-                    "reason": prefilter_reason
-                })
-                continue
+                prefilter_result, prefilter_reason = prefilter_by_title(v['name'])
+                if prefilter_result == "reject":
+                    funnel["prefilter_rejected"] += 1
+                    skipped_by_prefilter.append({
+                        "name": v['name'],
+                        "reason": prefilter_reason
+                    })
+                    continue
 
-            if prefilter_result == "fast_track":
-                funnel["prefilter_fast_track"] += 1
-            else:
-                funnel["prefilter_pass"] += 1
-
-            # === Stage 3: получаем детали и кидаем в LLM ===
-            time.sleep(1)
-            detail = get_vacancy_detail(v['id'])
-            if not detail or 'name' not in detail:
-                print(f"⚠️ Не удалось получить детали вакансии, пропускаем")
-                funnel["detail_fetch_failed"] += 1
-                continue
-
-            is_match, classification = is_relevant(detail)
-
-            log_prefix = (
-                f"[score={classification['match_score']}, "
-                f"tier={classification['tier']}, "
-                f"decision={classification['decision']}]"
-            )
-
-            if is_match:
-                funnel["llm_approved"] += 1
-                print(f"✅ Подходит {log_prefix}: {v['name']} — {v.get('employer', {}).get('name', '')}")
-                print(f"   reason: {classification['reason']}")
-                if classification['concerns']:
-                    print(f"   concerns: {'; '.join(classification['concerns'])}")
-
-                if detail.get('response_letter_required'):
-                    print(f"✉️ Письмо обязательно — пишем...")
-                    letter = write_cover_letter(detail)
+                if prefilter_result == "fast_track":
+                    funnel["prefilter_fast_track"] += 1
                 else:
-                    print(f"📨 Письмо не обязательно — откликаемся без письма")
-                    letter = ""
+                    funnel["prefilter_pass"] += 1
 
-                status = apply(v['id'], resume_id, letter)
-                if status in [200, 201]:
-                    print(f"📨 Отклик отправлен!")
-                    applied_ids.append(v['id'])
-                    applied.append(f"{v['name']} — {v.get('employer', {}).get('name', '')}")
-                    funnel["applied_success"] += 1
+                time.sleep(SLEEP_BEFORE_DETAIL)
+                detail = get_vacancy_detail(v['id'])
+                if not detail or 'name' not in detail:
+                    print(f"⚠️ Не получили детали, пропускаем")
+                    funnel["detail_fetch_failed"] += 1
+                    continue
+
+                is_match, classification = is_relevant(detail)
+
+                log_prefix = (
+                    f"[score={classification['match_score']}, "
+                    f"tier={classification['tier']}, "
+                    f"decision={classification['decision']}]"
+                )
+
+                if is_match:
+                    funnel["llm_approved"] += 1
+                    print(f"✅ Подходит {log_prefix}: {v['name']} — {v.get('employer', {}).get('name', '')}")
+                    print(f"   reason: {classification['reason']}")
+                    if classification['concerns']:
+                        print(f"   concerns: {'; '.join(classification['concerns'])}")
+
+                    if detail.get('response_letter_required'):
+                        print(f"✉️ Письмо обязательно — пишем...")
+                        letter = write_cover_letter(detail)
+                    else:
+                        letter = ""
+
+                    status, is_already = apply(v['id'], resume_id, letter)
+
+                    if status in [200, 201]:
+                        print(f"📨 Отклик отправлен!")
+                        applied_ids.append(v['id'])
+                        applied.append(f"{v['name']} — {v.get('employer', {}).get('name', '')}")
+                        funnel["applied_success"] += 1
+                        sha = save_applied_ids(applied_ids, sha)
+                    elif is_already:
+                        print(f"⏭️ hh говорит «уже откликались», добавляем в state")
+                        applied_ids.append(v['id'])
+                        funnel["applied_already"] += 1
+                        sha = save_applied_ids(applied_ids, sha)
+                    else:
+                        print(f"⚠️ Ошибка отклика: {status}")
+                        funnel["applied_failed"] += 1
                 else:
-                    print(f"⚠️ Ошибка отклика: {status}")
-                    funnel["applied_failed"] += 1
-            else:
-                funnel["llm_rejected"] += 1
-                print(f"❌ Не подходит {log_prefix}: {v['name']}")
-                print(f"   reason: {classification['reason']}")
-                skipped_by_llm.append({
-                    "name": v['name'],
-                    "score": classification['match_score'],
-                    "tier": classification['tier'],
-                    "reason": classification['reason']
-                })
-        time.sleep(2)
-    save_applied_ids(applied_ids, sha)
+                    funnel["llm_rejected"] += 1
+                    print(f"❌ Не подходит {log_prefix}: {v['name']}")
+                    print(f"   reason: {classification['reason']}")
+                    skipped_by_llm.append({
+                        "name": v['name'],
+                        "score": classification['match_score'],
+                        "tier": classification['tier'],
+                        "reason": classification['reason']
+                    })
 
-    # ============================================================
-    # Funnel breakdown — observability на уровне всей воронки.
-    # ============================================================
+            time.sleep(SLEEP_BETWEEN_SEARCHES)
+
+    except CaptchaRequiredError as e:
+        print(f"\n🛑 CIRCUIT BREAKER: {e}")
+        print(f"🛑 hh anti-fraud сработал. Прогон прерван, чтобы не усугублять блокировку.")
+        print(f"🛑 Уже отправленные {funnel['applied_success']} откликов сохранены.")
+        captcha_hit = True
+
+    sha = save_applied_ids(applied_ids, sha)
+
     print("\n" + "=" * 60)
     print("📊 ВОРОНКА:")
     print("=" * 60)
+    if captcha_hit:
+        print("  ⚠️ ПРОГОН ПРЕРВАН ПО CAPTCHA — данные ниже частичные ⚠️")
+        print()
     unique_after_dedup = funnel["fetched_total"] - funnel["duplicates_in_search"]
     fresh_vacancies = unique_after_dedup - funnel["already_applied"]
     print(f"  Получено от hh:            {funnel['fetched_total']}")
@@ -847,19 +854,17 @@ def main():
     print(f"  Отсеяно гео-фильтром:      -{funnel['geo_rejected']}")
     print(f"  Отсеяно префильтром:       -{funnel['prefilter_rejected']}")
     print(f"  Прошло префильтр:          {funnel['prefilter_fast_track'] + funnel['prefilter_pass']}")
-    print(f"    └ fast-track (whitelist):  {funnel['prefilter_fast_track']}")
-    print(f"    └ pass (серая зона):       {funnel['prefilter_pass']}")
+    print(f"    └ fast-track:              {funnel['prefilter_fast_track']}")
+    print(f"    └ pass:                    {funnel['prefilter_pass']}")
     print(f"  Не получили детали:        -{funnel['detail_fetch_failed']}")
     print(f"  ────────────────────────────")
     print(f"  LLM одобрила:              {funnel['llm_approved']}")
     print(f"  LLM отклонила:             {funnel['llm_rejected']}")
     print(f"  ────────────────────────────")
     print(f"  Откликов отправлено:       {funnel['applied_success']}")
+    print(f"  «Уже откликались» (heal):  {funnel['applied_already']}")
     print(f"  Ошибок отклика:            {funnel['applied_failed']}")
 
-    # ============================================================
-    # Детали отклонённых LLM — Maybe-зона важна для threshold tuning.
-    # ============================================================
     print("\n" + "=" * 60)
     print("📊 ИТОГ ПО ОТКЛИКАМ:")
     print("=" * 60)
@@ -871,35 +876,37 @@ def main():
     mid_zone = [s for s in skipped_by_llm if 3 <= s['score'] <= 4]
     hard_no = [s for s in skipped_by_llm if s['score'] <= 2]
 
-    print(f"\n🟡 Maybe-зона (score 5-6): {len(maybe_zone)}")
+    print(f"\n🟡 Maybe-зона (5-6): {len(maybe_zone)}")
     for s in maybe_zone[:15]:
         print(f"  [{s['score']}] {s['name']} — {s['reason']}")
 
-    print(f"\n🟠 Mid-зона (score 3-4): {len(mid_zone)}")
+    print(f"\n🟠 Mid-зона (3-4): {len(mid_zone)}")
     for s in mid_zone[:5]:
         print(f"  [{s['score']}] {s['name']} — {s['reason']}")
 
-    print(f"\n🔴 Hard NO (LLM, score 0-2): {len(hard_no)}")
+    print(f"\n🔴 Hard NO (LLM): {len(hard_no)}")
 
-    # Company / гео / префильтр — выводим агрегатами по причинам.
-    print(f"\n🔴 Company-фильтр отклонил: {len(skipped_by_company)}")
+    print(f"\n🔴 Company-фильтр: {len(skipped_by_company)}")
     if skipped_by_company:
         company_counts = Counter(s['employer'] for s in skipped_by_company)
-        for employer, count in company_counts.most_common(10):
-            print(f"  [{count}x] {employer}")
+        for emp, cnt in company_counts.most_common(10):
+            print(f"  [{cnt}x] {emp}")
 
-    print(f"\n🔴 Гео-фильтр отклонил: {len(skipped_by_geo)}")
+    print(f"\n🔴 Гео: {len(skipped_by_geo)}")
     if skipped_by_geo:
         geo_counts = Counter(s['area'] for s in skipped_by_geo)
-        for area, count in geo_counts.most_common(10):
-            print(f"  [{count}x] {area}")
+        for area, cnt in geo_counts.most_common(10):
+            print(f"  [{cnt}x] {area}")
 
-    print(f"\n🔴 Префильтр отклонил: {len(skipped_by_prefilter)}")
+    print(f"\n🔴 Префильтр: {len(skipped_by_prefilter)}")
     if skipped_by_prefilter:
         reason_counts = Counter(s['reason'] for s in skipped_by_prefilter)
-        for reason, count in reason_counts.most_common(10):
-            print(f"  [{count}x] {reason}")
+        for reason, cnt in reason_counts.most_common(10):
+            print(f"  [{cnt}x] {reason}")
+
+    return 1 if captcha_hit else 0
 
 
 if __name__ == "__main__":
-    main()
+    exit_code = main()
+    exit(exit_code)

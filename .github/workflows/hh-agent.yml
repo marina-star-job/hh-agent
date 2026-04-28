@@ -2,8 +2,19 @@ name: HH Agent
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    # Нечётный час — снижает шанс попасть в peak load на GitHub Actions cron.
+    # 07:17 UTC = 10:17 МСК.
+    - cron: '17 7 * * *'
   workflow_dispatch:
+
+# Concurrency lock — гарантирует, что одновременно работает
+# только ОДНА копия workflow. Если в момент запуска уже идёт другой run —
+# новый ставится в очередь (cancel-in-progress: false).
+# Это защита от race condition между manual и scheduled runs,
+# которая привела к удвоению request rate и captcha от hh.
+concurrency:
+  group: hh-agent
+  cancel-in-progress: false
 
 jobs:
   run_agent:
@@ -11,15 +22,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Install dependencies
         run: pip install requests
-
       - name: Write hh config
         run: |
           mkdir -p ~/.config/hh-applicant-tool
           echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
-
       - name: Run agent
         env:
           HH_ACCESS_TOKEN: ${{ secrets.HH_ACCESS_TOKEN }}

@@ -51,7 +51,7 @@ Hard NO:
   - C-level в крупных корпорациях (CPO, CTO, VP, Director)
 """.strip()
 
-RELEVANCE_THRESHOLD = 6
+RELEVANCE_THRESHOLD = 5
 
 # ============================================================
 # Параметры воронки.

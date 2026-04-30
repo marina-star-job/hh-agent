@@ -16,6 +16,9 @@ concurrency:
   group: hh-agent
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   run_agent:
     runs-on: ubuntu-latest

@@ -92,6 +92,9 @@ SEARCHES = [
     "руководитель AI",
     "руководитель ML",
     "AI Product",
+    "UX Researcher",
+    "операционный директор",
+    "COO",
 ]
 
 APPLIED_FILE = "applied_ids.json"
@@ -219,6 +222,13 @@ TITLE_WHITELIST = [
     r"\bвладелец\s+продукта\b",
     r"\bml\s+менеджер\b",
     r"\bai\s+менеджер\b",
+    r"\bux\s*research\w*\b",
+    r"\bux[\s-]?исследовател\w*\b",
+    r"\buser\s+research\w*\b",
+    r"\bоперационн\w+\s+директор\b",
+    r"\bисполнительн\w+\s+директор\b",
+    r"\bcoo\b",
+    r"\bchief\s+operating\s+officer\b",
 ]
 
 TITLE_BLACKLIST = [
@@ -233,7 +243,7 @@ TITLE_BLACKLIST = [
     r"\bразработчик\b",
     r"\bпрограммист\b",
     r"\bинженер\b",
-    r"\bаналитик\b(?!\s+проектов)",
+    r"\b(?<!продуктовый\s)(?<!ux\s)(?<!ux-)аналитик\b(?!\s+проектов)",
     r"\bдизайнер\b",
     r"\bарт[\s-]?директор\b",
     r"\bui[/\s]ux\b",
@@ -500,7 +510,7 @@ def is_relevant(vacancy):
 
 Шаг 1. Определи tier:
   - "tier_1": AI / ML / NLP / LLM / RAG / GenAI / Computer Vision
-  - "tier_2": HR-tech, IT/SaaS, продуктовые компании, цифровая трансформация
+  - "tier_2": HR-tech, IT/SaaS, продуктовые компании, цифровая трансформация, UX-research в продуктовом контексте
   - "tier_3": финтех, банки, EdTech, e-commerce, прочий IT
   - "out_of_scope": не IT или роль из hard NO
 
@@ -524,6 +534,16 @@ def is_relevant(vacancy):
   - "Head of AI Projects", "COO в AI-стартапе", "Lead PM в небольшой команде" — OK
   - "Head of Product в Сбере", "Director of PMO" — NO
   - крупная корп: банки топ-20, телеком, ритейл-гиганты, госкомпании
+
+Шаг 4b. Операционные директорские роли (COO / операционный / исполнительный директор):
+  - Оценивай по СОДЕРЖАНИЮ роли, не по титулу.
+  - OK: операционное управление, процессы, продукт, проекты, кросс-функциональная
+    координация, управление командами — пересечение с PM/Project/Product.
+  - NO: чисто финансовый профиль (CFO-типаж), технический директор с наймом
+    инженеров, представительский C-level без операционки, производство/логистика
+    без продукта.
+  - UX Researcher: релевантно ТОЛЬКО при наличии product/PM/discovery-компонента.
+    Чистый UX-research или дизайн-уклон → maybe/no.
 
 Шаг 5. match_score 0-10:
   - 9-10: tier_1 + middle/senior PM + стартап/продуктовая
@@ -559,6 +579,18 @@ def is_relevant(vacancy):
 Пример 6:
 Вакансия: "Арт-директор"
 Ответ: {"decision": "no", "match_score": 0, "tier": "out_of_scope", "concerns": ["Дизайн — hard NO"], "reason": "Дизайн-руководство."}
+
+Пример 7:
+Вакансия: "Операционный директор / COO в AI-стартапе (20 чел)"
+Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": [], "reason": "Операционное управление в AI-стартапе, пересечение с PM."}
+
+Пример 8:
+Вакансия: "UX Researcher в продуктовую команду финтеха"
+Ответ: {"decision": "yes", "match_score": 6, "tier": "tier_2", "concerns": ["UX-research как смежная роль"], "reason": "Продуктовый research-контекст, пересечение с CustDev."}
+
+Пример 9:
+Вакансия: "Исполнительный директор завода металлоконструкций"
+Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Производство без продукта"], "reason": "Операционка вне IT/продукта."}
 
 === ФОРМАТ ОТВЕТА ===
 

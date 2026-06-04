@@ -697,7 +697,9 @@ def apply(vacancy_id, resume_id, cover_letter):
     response_text_lower = r.text.lower()
     is_already_applied = any(sig in response_text_lower for sig in already_applied_signals)
 
-    return r.status_code, is_already_applied
+    error_text = r.text[:300]
+
+    return r.status_code, is_already_applied, error_text
 
 
 def get_resume_id():
@@ -733,6 +735,7 @@ def main():
     skipped_by_prefilter = []
     skipped_by_geo = []
     skipped_by_company = []
+    error_samples = []
     seen_ids = set()
 
     funnel = {
@@ -831,7 +834,7 @@ def main():
                     else:
                         letter = ""
 
-                    status, is_already = apply(v['id'], resume_id, letter)
+                    status, is_already, error_text = apply(v['id'], resume_id, letter)
 
                     if status in [200, 201]:
                         print(f"📨 Отклик отправлен!")
@@ -845,8 +848,13 @@ def main():
                         funnel["applied_already"] += 1
                         sha = save_applied_ids(applied_ids, sha)
                     else:
-                        print(f"⚠️ Ошибка отклика: {status}")
+                        print(f"⚠️ Ошибка отклика: {status} | {error_text}")
                         funnel["applied_failed"] += 1
+                        error_samples.append({
+                            "name": v['name'],
+                            "status": status,
+                            "error": error_text
+                        })
                 else:
                     funnel["llm_rejected"] += 1
                     print(f"❌ Не подходит {log_prefix}: {v['name']}")
@@ -935,6 +943,23 @@ def main():
         reason_counts = Counter(s['reason'] for s in skipped_by_prefilter)
         for reason, cnt in reason_counts.most_common(10):
             print(f"  [{cnt}x] {reason}")
+
+    if error_samples:
+        print(f"\n🔴 Ошибки отклика по типам: {len(error_samples)}")
+        error_types = []
+        for s in error_samples:
+            err_type = None
+            try:
+                parsed = json.loads(s['error'])
+                errors = parsed.get('errors', [])
+                if errors:
+                    err_type = errors[0].get('type')
+            except (ValueError, AttributeError, TypeError):
+                err_type = None
+            error_types.append(err_type or str(s['status']))
+        error_counts = Counter(error_types)
+        for err_type, cnt in error_counts.most_common(10):
+            print(f"  [{cnt}x] {err_type}")
 
     return 1 if captcha_hit else 0
 

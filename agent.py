@@ -95,6 +95,9 @@ SEARCHES = [
     "UX Researcher",
     "операционный директор",
     "COO",
+    "промпт инженер",
+    "разметка данных",
+    "асессор",
 ]
 
 APPLIED_FILE = "applied_ids.json"
@@ -204,6 +207,20 @@ def geo_filter(vacancy):
 # ============================================================
 # Префильтр по тайтлу.
 # ============================================================
+AI_LLM_FASTTRACK = [
+    r"\bprompt[\s-]?engineer\b",
+    r"\bпромпт[\s-]?инженер\b",
+    r"\bинженер\s+промптов\b",
+    r"\bprompt\s+engineering\b",
+    r"\bai[\s-]?trainer\b",
+    r"\bтренер\s+(ии|llm|нейросет\w+|моделей)\b",
+    r"\bразметчик\b",
+    r"\bразметк\w*\s+данных\b",
+    r"\bаннотатор\b",
+    r"\bасессор\b",
+    r"\bбенчмарк\w*\b",
+]
+
 TITLE_WHITELIST = [
     r"\bproduct manager\b",
     r"\bproject manager\b",
@@ -270,6 +287,9 @@ TITLE_BLACKLIST = [
 
 def prefilter_by_title(title):
     title_lower = title.lower()
+    for pattern in AI_LLM_FASTTRACK:
+        if re.search(pattern, title_lower):
+            return "fast_track", None
     for pattern in TITLE_BLACKLIST:
         if re.search(pattern, title_lower):
             return "reject", f"blacklist: {pattern}"
@@ -509,7 +529,9 @@ def is_relevant(vacancy):
 === КАК ОЦЕНИВАТЬ ===
 
 Шаг 1. Определи tier:
-  - "tier_1": AI / ML / NLP / LLM / RAG / GenAI / Computer Vision
+  - "tier_1": AI / ML / NLP / LLM / RAG / GenAI / Computer Vision; а также
+    hands-on AI/LLM роли (prompt engineering, создание бенчмарков, разметка
+    данных / AI-тренинг, асессоры / оценка LLM)
   - "tier_2": HR-tech, IT/SaaS, продуктовые компании, цифровая трансформация, UX-research в продуктовом контексте
   - "tier_3": финтех, банки, EdTech, e-commerce, прочий IT
   - "out_of_scope": не IT или роль из hard NO
@@ -518,7 +540,9 @@ def is_relevant(vacancy):
   - 1С (любые роли)
   - чистые продажи / sales / аккаунт-менеджмент
   - дизайн / арт-директор / UX-lead
-  - чистая разработка (Backend/Frontend/Data Engineer/DevOps)
+  - чистая разработка: backend/frontend/data engineer/ML engineer → NO даже
+    с AI в названии. Это НЕ относится к prompt eng / разметке / асессорам /
+    бенчмаркам — те OK.
   - HR-роли как основная функция (рекрутер, HRD, HR BP, T&D) → NO.
     ИСКЛЮЧЕНИЕ: IT/продуктовая роль, где HR-функции второстепенны или это
     HR-tech продукт (People Ops в IT-компании, продакт HR-tech, операционная
@@ -526,7 +550,9 @@ def is_relevant(vacancy):
     отклонять. Граница: отклоняем, если это HR-РОЛЬ; принимаем, если это
     IT/продуктовая роль с HR-довеском.
   - маркетинг / SMM / контент-менеджер
-  - стажировка / junior / trainee
+  - junior / стажировка / без опыта → NO, КРОМЕ hands-on AI/LLM ролей
+    (prompt engineering, бенчмарки, разметка данных/AI-тренинг, асессор LLM) —
+    для них грейд не важен, junior и без опыта OK.
   - C-level в крупной корпорации
 
 Шаг 3. Позитивные сигналы:
@@ -612,6 +638,22 @@ def is_relevant(vacancy):
 Пример 12:
 Вакансия: "HR Business Partner в банке"
 Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Чистая HR-роль"], "reason": "HR как основная функция — hard NO."}
+
+Пример 13:
+Вакансия: "Prompt Engineer (опыт не требуется)"
+Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": ["Hands-on AI, грейд не важен"], "reason": "Prompt engineering — целевая AI/LLM роль."}
+
+Пример 14:
+Вакансия: "Асессор для оценки ответов нейросети"
+Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_1", "concerns": [], "reason": "Оценка LLM — целевая hands-on AI роль."}
+
+Пример 15:
+Вакансия: "Разметчик данных для обучения моделей"
+Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_1", "concerns": ["Junior-уровень OK для AI-разметки"], "reason": "AI-тренинг/разметка — целевая категория."}
+
+Пример 16:
+Вакансия: "Junior Backend Developer в AI-команду"
+Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Чистая разработка"], "reason": "Backend-разработка — hard NO даже в AI-команде."}
 
 === ФОРМАТ ОТВЕТА ===
 

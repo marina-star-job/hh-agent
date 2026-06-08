@@ -913,10 +913,13 @@ def main():
                     else:
                         print(f"⚠️ Ошибка отклика: {status} | {error_text}")
                         funnel["applied_failed"] += 1
+                        vacancy_url = detail.get('alternate_url') or f"https://hh.ru/vacancy/{v['id']}"
                         error_samples.append({
                             "name": v['name'],
+                            "employer": v.get('employer', {}).get('name', ''),
                             "status": status,
-                            "error": error_text
+                            "error": error_text,
+                            "url": vacancy_url
                         })
                 else:
                     funnel["llm_rejected"] += 1
@@ -1010,6 +1013,7 @@ def main():
     if error_samples:
         print(f"\n🔴 Ошибки отклика по типам: {len(error_samples)}")
         error_types = []
+        test_required = []
         for s in error_samples:
             err_type = None
             try:
@@ -1020,9 +1024,18 @@ def main():
             except (ValueError, AttributeError, TypeError):
                 err_type = None
             error_types.append(err_type or str(s['status']))
+            err_blob = f"{err_type or ''} {s.get('error', '')}".lower()
+            if 'test' in err_blob or err_type == 'negotiations':
+                test_required.append(s)
         error_counts = Counter(error_types)
         for err_type, cnt in error_counts.most_common(10):
             print(f"  [{cnt}x] {err_type}")
+
+        if test_required:
+            print(f"\n📋 Вакансии с обязательным тестом — откликнуться вручную:")
+            for s in test_required:
+                print(f"  • {s['name']} — {s.get('employer', '')}")
+                print(f"    {s.get('url', '')}")
 
     return 1 if captcha_hit else 0
 

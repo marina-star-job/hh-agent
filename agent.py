@@ -100,6 +100,31 @@ SEARCHES = [
     "асессор",
 ]
 
+# ============================================================
+# Казахстан (Алматы) — ОТДЕЛЬНАЯ ветка.
+# hh — единый API, регион задаётся параметром area (для Алматы 160).
+# Эти запросы идут с явным area, поэтому НЕ режутся РФ-geo_filter'ом;
+# вместо него к ним применяется KZT-зарплатный фильтр.
+# area ID подтверждены через https://api.hh.ru/areas: Казахстан=40, Алматы=160.
+# ============================================================
+ALMATY_AREA_ID = 160
+ALMATY_MIN_SALARY_KZT = 800000
+
+SEARCHES_ALMATY = [
+    "Product Manager",
+    "Project Manager",
+    "Руководитель проектов",
+    "Руководитель продукта",
+    "Product Owner",
+    "Владелец продукта",
+    "руководитель AI",
+    "руководитель ML",
+    "AI Product",
+    "промпт инженер",
+    "разметка данных",
+    "асессор",
+]
+
 APPLIED_FILE = "applied_ids.json"
 
 
@@ -202,6 +227,32 @@ def geo_filter(vacancy):
         if region in area_lower:
             return "reject", f"регион РФ: {area_name}"
     return "pass", None
+
+
+# ============================================================
+# Зарплатный фильтр для ветки Алматы (только KZT).
+# Конвертацию курсов НЕ закладываем — фильтруем по сумме только KZT-вакансии,
+# остальные валюты пропускаем мимо денежного фильтра.
+#   - salary не указана                  → pass (не режем)
+#   - KZT, нижняя граница >= 800000       → pass
+#   - KZT, нижняя граница < 800000        → reject
+#   - KZT, нижняя граница не указана      → pass (нечего сравнивать, не режем)
+#   - другая валюта (USD/RUB/…)           → pass (деньгами не фильтруем)
+# Работает по salary из list-элемента поиска — дешёвая стадия ДО запроса detail.
+# ============================================================
+def almaty_salary_filter(vacancy):
+    salary = vacancy.get("salary")
+    if not salary:
+        return "pass", None
+    currency = (salary.get("currency") or "").upper()
+    if currency != "KZT":
+        return "pass", None
+    low = salary.get("from")
+    if low is None:
+        return "pass", None
+    if low >= ALMATY_MIN_SALARY_KZT:
+        return "pass", None
+    return "reject", f"KZT from={low} < {ALMATY_MIN_SALARY_KZT}"
 
 
 # ============================================================
@@ -352,8 +403,12 @@ def save_applied_ids(ids, sha):
 # ============================================================
 # hh API клиенты с retry + exponential backoff + captcha detection.
 # ============================================================
-def get_vacancies(search):
-    """Получаем вакансии с pagination."""
+def get_vacancies(search, area=None):
+    """Получаем вакансии с pagination.
+
+    area=None — поведение как раньше (без area, регионы РФ режутся постфактум
+    в geo_filter). area=<id> — явный регион (используется для ветки Алматы).
+    """
     all_items = []
     for page in range(MAX_PAGES):
         url = "https://api.hh.ru/vacancies"
@@ -364,6 +419,8 @@ def get_vacancies(search):
             "page": page,
             "order_by": "publication_time",
         }
+        if area is not None:
+            params["area"] = area
         headers = {"Authorization": f"Bearer {HH_TOKEN}"}
 
         page_items = []
@@ -514,9 +571,28 @@ def ask_gpt_json(system, user, max_retries=3):
 
 
 # ============================================================
+# Доп. блок к промпту для вакансий из Казахстана (Алматы).
+# Подмешивается только в ветке Алматы (kz_priority=True), московскую
+# классификацию не трогает.
+# ============================================================
+KZ_PRIORITY_NOTE = """
+
+=== КОНТЕКСТ: КАЗАХСТАН (АЛМАТЫ) ===
+Эта вакансия из Казахстана (Алматы). В регионе острый дефицит middle/senior
+специалистов по AI / ML / NLP / LLM / data. Правила приоритизации:
+  - Если роль связана с AI / ML / NLP / LLM / RAG / data — подними match_score
+    на 1-2 пункта относительно обычной оценки (приоритет найма) и явно отметь
+    высокий приоритет: начни reason с метки "[KZ AI/ML priority] ".
+  - Это НЕ отменяет hard NO (1С, чистая разработка, продажи, дизайн, HR-роль
+    и т.д.) — нерелевантные роли остаются decision="no".
+  - Не-AI/ML роли оценивай как обычно, без бонуса.
+"""
+
+
+# ============================================================
 # LLM-классификатор.
 # ============================================================
-def is_relevant(vacancy):
+def is_relevant(vacancy, kz_priority=False):
     system = """Ты — ассистент, помогающий ML/AI Project Manager оценивать релевантность вакансий с hh.ru.
 
 Твоя задача — для каждой вакансии вернуть СТРОГО валидный JSON с оценкой релевантности.
@@ -661,6 +737,9 @@ def is_relevant(vacancy):
 {"decision": "yes"|"maybe"|"no", "match_score": <0-10>, "tier": "tier_1"|"tier_2"|"tier_3"|"out_of_scope", "concerns": [...], "reason": "..."}
 """
 
+    if kz_priority:
+        system += KZ_PRIORITY_NOTE
+
     user = f"""Вакансия: {vacancy['name']}
 Компания: {vacancy.get('employer', {}).get('name', '')}
 Город: {vacancy.get('area', {}).get('name', 'не указан')}
@@ -798,6 +877,7 @@ def main():
     skipped_by_prefilter = []
     skipped_by_geo = []
     skipped_by_company = []
+    skipped_by_salary = []
     error_samples = []
     seen_ids = set()
 
@@ -816,15 +896,30 @@ def main():
         "applied_success": 0,
         "applied_failed": 0,
         "applied_already": 0,
+        # ── ветка Алматы (подмножество счётчиков выше, для видимости) ──
+        "almaty_fetched": 0,
+        "almaty_salary_rejected": 0,
+        "almaty_llm_approved": 0,
     }
 
     captcha_hit = False
 
+    # План поиска: сначала московская ветка (area=None, как раньше),
+    # затем отдельная ветка Алматы (area=160). Флаг is_almaty управляет
+    # гео-стадией, зарплатным фильтром и приоритетом AI/ML в промпте.
+    search_plan = (
+        [(s, None, False) for s in SEARCHES]
+        + [(s, ALMATY_AREA_ID, True) for s in SEARCHES_ALMATY]
+    )
+
     try:
-        for search in SEARCHES:
-            print(f"\n🔍 Ищем: {search}")
-            vacancies = get_vacancies(search)
+        for search, area, is_almaty in search_plan:
+            label = " (Алматы)" if is_almaty else ""
+            print(f"\n🔍 Ищем: {search}{label}")
+            vacancies = get_vacancies(search, area=area)
             funnel["fetched_total"] += len(vacancies)
+            if is_almaty:
+                funnel["almaty_fetched"] += len(vacancies)
 
             for v in vacancies:
                 if v['id'] in seen_ids:
@@ -845,15 +940,27 @@ def main():
                     })
                     continue
 
-                geo_result, geo_reason = geo_filter(v)
-                if geo_result == "reject":
-                    funnel["geo_rejected"] += 1
-                    skipped_by_geo.append({
-                        "name": v['name'],
-                        "area": v.get('area', {}).get('name', ''),
-                        "reason": geo_reason
-                    })
-                    continue
+                if is_almaty:
+                    # Алматы НЕ режем РФ-geo_filter'ом — вместо него KZT-фильтр.
+                    salary_result, salary_reason = almaty_salary_filter(v)
+                    if salary_result == "reject":
+                        funnel["almaty_salary_rejected"] += 1
+                        skipped_by_salary.append({
+                            "name": v['name'],
+                            "employer": v.get('employer', {}).get('name', ''),
+                            "reason": salary_reason
+                        })
+                        continue
+                else:
+                    geo_result, geo_reason = geo_filter(v)
+                    if geo_result == "reject":
+                        funnel["geo_rejected"] += 1
+                        skipped_by_geo.append({
+                            "name": v['name'],
+                            "area": v.get('area', {}).get('name', ''),
+                            "reason": geo_reason
+                        })
+                        continue
 
                 prefilter_result, prefilter_reason = prefilter_by_title(v['name'])
                 if prefilter_result == "reject":
@@ -876,7 +983,7 @@ def main():
                     funnel["detail_fetch_failed"] += 1
                     continue
 
-                is_match, classification = is_relevant(detail)
+                is_match, classification = is_relevant(detail, kz_priority=is_almaty)
 
                 log_prefix = (
                     f"[score={classification['match_score']}, "
@@ -886,6 +993,8 @@ def main():
 
                 if is_match:
                     funnel["llm_approved"] += 1
+                    if is_almaty:
+                        funnel["almaty_llm_approved"] += 1
                     print(f"✅ Подходит {log_prefix}: {v['name']} — {v.get('employer', {}).get('name', '')}")
                     print(f"   reason: {classification['reason']}")
                     if classification['concerns']:
@@ -970,6 +1079,10 @@ def main():
     print(f"  Откликов отправлено:       {funnel['applied_success']}")
     print(f"  «Уже откликались» (heal):  {funnel['applied_already']}")
     print(f"  Ошибок отклика:            {funnel['applied_failed']}")
+    print(f"  ────────────────────────────")
+    print(f"  🇰🇿 Алматы — получено:      {funnel['almaty_fetched']}")
+    print(f"  🇰🇿 Алматы — отсеяно по KZT: -{funnel['almaty_salary_rejected']}")
+    print(f"  🇰🇿 Алматы — LLM одобрила:   {funnel['almaty_llm_approved']}")
 
     print("\n" + "=" * 60)
     print("📊 ИТОГ ПО ОТКЛИКАМ:")
@@ -1003,6 +1116,11 @@ def main():
         geo_counts = Counter(s['area'] for s in skipped_by_geo)
         for area, cnt in geo_counts.most_common(10):
             print(f"  [{cnt}x] {area}")
+
+    print(f"\n🔴 Алматы — отсев по KZT-зарплате: {len(skipped_by_salary)}")
+    if skipped_by_salary:
+        for s in skipped_by_salary[:10]:
+            print(f"  • {s['name']} — {s['employer']} ({s['reason']})")
 
     print(f"\n🔴 Префильтр: {len(skipped_by_prefilter)}")
     if skipped_by_prefilter:

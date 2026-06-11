@@ -932,12 +932,14 @@ def main():
 
     captcha_hit = False
 
-    # План поиска: сначала московская ветка (area=None, как раньше),
-    # затем отдельная ветка Алматы (area=160). Флаг is_almaty управляет
-    # гео-стадией, зарплатным фильтром и приоритетом AI/ML в промпте.
+    # План поиска: сначала ветка Алматы (area=160), затем московская
+    # (area=None). Алматы идёт первой, чтобы успеть отработать до того,
+    # как капча (прилетает ~раз в 3 дня) прервёт прогон на московской части
+    # и оставит kz-счётчики нулевыми. Флаг is_almaty управляет гео-стадией,
+    # зарплатным фильтром и приоритетом AI/ML в промпте.
     search_plan = (
-        [(s, None, False) for s in SEARCHES]
-        + [(s, ALMATY_AREA_ID, True) for s in SEARCHES_ALMATY]
+        [(s, ALMATY_AREA_ID, True) for s in SEARCHES_ALMATY]
+        + [(s, None, False) for s in SEARCHES]
     )
 
     try:

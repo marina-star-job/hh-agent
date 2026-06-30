@@ -19,36 +19,33 @@ PROFILE = os.environ.get('PROFILE', '')
 # Компактный профиль для классификатора is_relevant.
 # ============================================================
 CANDIDATE_PROFILE = """
-Кандидат: ML/AI Project Manager, женщина, 32 года, Москва.
-Опыт: ~5.5 лет (Product Manager → Project Manager → ML PM).
-Текущая роль: ML PM в банке (NLP/LLM/RAG проекты).
+Кандидат: Руководитель отдела продаж, 16 лет опыта, Москва.
+Грейд: руководящий (Senior / Lead / Head). НЕ рядовой менеджер по продажам.
 
-Грейд: middle → middle+ → senior-light.
-Сильные стороны: LLM, NLP, RAG, semantic search, оценка ML-моделей
-(Precision/Recall/F1, BERTScore), Agile/Scrum, бизнес-анализ, CustDev,
-Jira/Confluence, Swagger.
+Сильные стороны: построение отделов продаж с нуля, KPI и системы мотивации,
+внедрение CRM (AmoCRM), B2B-продажи, переговоры, конкурентная разведка / SWOT,
+ценообразование, обучение и развитие команд продаж.
+Сильнее всего — опыт в IT / интернет-компаниях / системной интеграции.
 
-Целевые роли: Product Manager, Project Manager, Product Owner,
-ML PM, AI PM, Program Manager, Delivery Manager, Scrum Master,
-Руководитель проектов / продукта.
+Целевые роли: Руководитель отдела продаж (РОП), Head of Sales,
+Директор по продажам, Коммерческий директор, Руководитель направления продаж,
+Руководитель отдела продаж B2B, Business Development Manager,
+Sales Manager (только руководящего/lead-уровня).
+
+Акцент: B2B, построение отделов с нуля, руководящий уровень.
+Домен: любая отрасль, НО IT/tech в приоритете (tier-система).
 
 Приоритет доменов:
-  TIER 1 (best fit): AI / ML / NLP / LLM / RAG
-  TIER 2 (strong): HR-tech, IT/SaaS, продуктовые компании
-  TIER 3 (ok): финтех, банки, EdTech, e-commerce, прочий IT
-
-Lead/Head-of роли: ОК только в стартапах и AI-командах до ~20 человек.
-В крупных корпорациях — нет.
+  TIER 1 (best fit): IT / SaaS / системная интеграция / интернет-компании / tech
+  TIER 2 (strong): финтех, телеком, digital, консалтинг, услуги для бизнеса
+  TIER 3 (ok): прочий B2B (производство, оптовая торговля и т.п.)
 
 Hard NO:
-  - 1С (любые роли)
-  - продажи / B2B sales / аккаунт-менеджмент
-  - дизайн / арт-директор / UX-lead
-  - чистая разработка (Backend/Frontend/Data Engineer)
-  - HR-роли (HR BP, HRD, рекрутер)
-  - маркетинг / SMM / контент
-  - стажировки / junior
-  - C-level в крупных корпорациях (CPO, CTO, VP, Director)
+  - рядовой менеджер по продажам (не руководитель)
+  - junior / стажёр / без опыта / не-руководящие позиции
+  - узкотехнические роли (разработка, аналитика, бухгалтерия, юристы)
+  - HoReCa (рестораны / бары / кафе)
+  - детейлинг / автомойки
 """.strip()
 
 RELEVANCE_THRESHOLD = 5
@@ -73,56 +70,19 @@ SLEEP_AFTER_GPT = 1             # после успешного LLM-вызова
 
 
 # ============================================================
-# SEARCHES сокращены с 17 до 9.
-# Раньше пересекающиеся query генерили 27% дубликатов
-# (782 duplicates на 2902 fetched). Убраны:
-#   - "AI Project" / "ML Project" / "AI менеджер" / "ML менеджер" —
-#     дублировали "руководитель AI/ML"
-#   - "Product Manager IT" / "банк" / "Project Manager финтех" —
-#     subset'ы "Product Manager" / "Project Manager"
-#   - "Менеджер продукта" — дубль "Product Manager" на русском
+# SEARCHES под руководителя продаж.
+# Запросы широкие — дадут не-IT и рядовых менеджеров; их отсортирует
+# классификатор по домену (tier) и грейду (руководящий vs рядовой).
 # ============================================================
 SEARCHES = [
-    "Product Manager",
-    "Project Manager",
-    "Руководитель проектов",
-    "Руководитель продукта",
-    "Product Owner",
-    "Владелец продукта",
-    "руководитель AI",
-    "руководитель ML",
-    "AI Product",
-    "UX Researcher",
-    "операционный директор",
-    "COO",
-    "промпт инженер",
-    "разметка данных",
-    "асессор",
-]
-
-# ============================================================
-# Казахстан (Алматы) — ОТДЕЛЬНАЯ ветка.
-# hh — единый API, регион задаётся параметром area (для Алматы 160).
-# Эти запросы идут с явным area, поэтому НЕ режутся РФ-geo_filter'ом;
-# вместо него к ним применяется KZT-зарплатный фильтр.
-# area ID подтверждены через https://api.hh.ru/areas: Казахстан=40, Алматы=160.
-# ============================================================
-ALMATY_AREA_ID = 160
-ALMATY_MIN_SALARY_KZT = 800000
-
-SEARCHES_ALMATY = [
-    "Product Manager",
-    "Project Manager",
-    "Руководитель проектов",
-    "Руководитель продукта",
-    "Product Owner",
-    "Владелец продукта",
-    "руководитель AI",
-    "руководитель ML",
-    "AI Product",
-    "промпт инженер",
-    "разметка данных",
-    "асессор",
+    "руководитель отдела продаж",
+    "head of sales",
+    "директор по продажам",
+    "коммерческий директор",
+    "руководитель направления продаж",
+    "РОП",
+    "руководитель отдела продаж B2B",
+    "business development manager",
 ]
 
 APPLIED_FILE = "applied_ids.json"
@@ -230,117 +190,46 @@ def geo_filter(vacancy):
 
 
 # ============================================================
-# Зарплатный фильтр для ветки Алматы (только KZT).
-# Конвертацию курсов НЕ закладываем — фильтруем по сумме только KZT-вакансии,
-# остальные валюты пропускаем мимо денежного фильтра.
-#   - salary не указана                  → pass (не режем)
-#   - KZT, нижняя граница >= 800000       → pass
-#   - KZT, нижняя граница < 800000        → reject
-#   - KZT, нижняя граница не указана      → pass (нечего сравнивать, не режем)
-#   - другая валюта (USD/RUB/…)           → pass (деньгами не фильтруем)
-# Работает по salary из list-элемента поиска — дешёвая стадия ДО запроса detail.
-# ============================================================
-def almaty_salary_filter(vacancy):
-    salary = vacancy.get("salary")
-    if not salary:
-        return "pass", None
-    currency = (salary.get("currency") or "").upper()
-    if currency != "KZT":
-        return "pass", None
-    low = salary.get("from")
-    if low is None:
-        return "pass", None
-    if low >= ALMATY_MIN_SALARY_KZT:
-        return "pass", None
-    return "reject", f"KZT from={low} < {ALMATY_MIN_SALARY_KZT}"
-
-
-# ============================================================
 # Префильтр по тайтлу.
+# Под руководителя продаж: пропускаем руководящие sales-роли, режем
+# junior/стажёров и явно не-sales узкотехнические роли. Рядовой
+# "менеджер по продажам" регуляркой НЕ режем — грейд надёжнее определит
+# LLM по описанию (рядовость тонко отличается от руководящей роли).
 # ============================================================
-AI_LLM_FASTTRACK = [
-    r"\bprompt[\s-]?engineer\b",
-    r"\bпромпт[\s-]?инженер\b",
-    r"\bинженер\s+промптов\b",
-    r"\bprompt\s+engineering\b",
-    r"\bai[\s-]?trainer\b",
-    r"\bтренер\s+(ии|llm|нейросет\w+|моделей)\b",
-    r"\bразметчик\b",
-    r"\bразметк\w*\s+данных\b",
-    r"\bаннотатор\b",
-    r"\bасессор\b",
-    r"\bбенчмарк\w*\b",
-]
-
 TITLE_WHITELIST = [
-    r"\bproduct manager\b",
-    r"\bproject manager\b",
-    r"\bproduct owner\b",
-    r"\bml\s*pm\b",
-    r"\bai\s*pm\b",
-    r"\bml\s+project\b",
-    r"\bai\s+project\b",
-    r"\bprogram manager\b",
-    r"\bdelivery manager\b",
-    r"\bscrum master\b",
-    r"\bруководитель\s+(проектов|продукта|продуктов)\b",
-    r"\bменеджер\s+(проектов|продукта|продуктов)\b",
-    r"\bменеджер\s+\w+\s+проектов\b",
-    r"\bпродакт[\s-]?менеджер\b",
-    r"\bвладелец\s+продукта\b",
-    r"\bml\s+менеджер\b",
-    r"\bai\s+менеджер\b",
-    r"\bux\s*research\w*\b",
-    r"\bux[\s-]?исследовател\w*\b",
-    r"\buser\s+research\w*\b",
-    r"\bоперационн\w+\s+директор\b",
-    r"\bисполнительн\w+\s+директор\b",
-    r"\bcoo\b",
-    r"\bchief\s+operating\s+officer\b",
+    r"\bруководитель\s+отдела\s+продаж\b",
+    r"\bруководитель\s+направления\s+продаж\b",
+    r"\bруководитель\s+группы\s+продаж\b",
+    r"\bначальник\s+отдела\s+продаж\b",
+    r"\bhead\s+of\s+sales\b",
+    r"\bдиректор\s+по\s+продажам\b",
+    r"\bкоммерческий\s+директор\b",
+    r"\bроп\b",
+    r"\bbusiness\s+development\s+manager\b",
+    r"\bsales\s+(lead|head|director)\b",
+    r"\b(lead|head|director)\s+sales\b",
 ]
 
 TITLE_BLACKLIST = [
-    r"\b1с\b",
-    r"\bback[\s-]?end\b",
-    r"\bfront[\s-]?end\b",
-    r"\bfull[\s-]?stack\b",
-    r"\bdata\s+engineer\b",
-    r"\bdevops\b",
-    r"\bqa\s+engineer\b",
-    r"\bтестировщик\b",
-    r"\bразработчик\b",
-    r"\bпрограммист\b",
-    r"\bинженер\b",
-    r"\b(?<!продуктовый\s)(?<!ux\s)(?<!ux-)аналитик\b(?!\s+проектов)",
-    r"\bдизайнер\b",
-    r"\bарт[\s-]?директор\b",
-    r"\bui[/\s]ux\b",
-    r"\bрекрутер\b",
-    r"\bhr\s*(bp|d|директор|менеджер)\b",
-    r"\bкадровик\b",
-    r"\bменеджер\s+по\s+продажам\b",
-    r"\bменеджер\s+по\s+работе\s+с\s+клиентами\b",
-    r"\bb2b\s+sales\b",
-    r"\bsmm\b",
-    r"\bконтент[\s-]?менеджер\b",
-    r"\bкопирайтер\b",
+    r"\bjunior\b",
     r"\bстажёр\b",
     r"\bстажер\b",
     r"\bintern\b",
     r"\btrainee\b",
-    r"\bjunior\b",
+    r"\bразработчик\b",
+    r"\bпрограммист\b",
+    r"\bback[\s-]?end\b",
+    r"\bfront[\s-]?end\b",
+    r"\bfull[\s-]?stack\b",
+    r"\bdevops\b",
     r"\bбухгалтер\b",
     r"\bюрист\b",
-    r"\bоператор\b",
-    r"\bмастер\s+смены\b",
+    r"\bдизайнер\b",
 ]
 
 
 def prefilter_by_title(title):
     title_lower = title.lower()
-    for pattern in AI_LLM_FASTTRACK:
-        if re.search(pattern, title_lower):
-            return "fast_track", None
     for pattern in TITLE_BLACKLIST:
         if re.search(pattern, title_lower):
             return "reject", f"blacklist: {pattern}"
@@ -571,29 +460,10 @@ def ask_gpt_json(system, user, max_retries=3):
 
 
 # ============================================================
-# Доп. блок к промпту для вакансий из Казахстана (Алматы).
-# Подмешивается только в ветке Алматы (kz_priority=True), московскую
-# классификацию не трогает.
-# ============================================================
-KZ_PRIORITY_NOTE = """
-
-=== КОНТЕКСТ: КАЗАХСТАН (АЛМАТЫ) ===
-Эта вакансия из Казахстана (Алматы). В регионе острый дефицит middle/senior
-специалистов по AI / ML / NLP / LLM / data. Правила приоритизации:
-  - Если роль связана с AI / ML / NLP / LLM / RAG / data — подними match_score
-    на 1-2 пункта относительно обычной оценки (приоритет найма) и явно отметь
-    высокий приоритет: начни reason с метки "[KZ AI/ML priority] ".
-  - Это НЕ отменяет hard NO (1С, чистая разработка, продажи, дизайн, HR-роль
-    и т.д.) — нерелевантные роли остаются decision="no".
-  - Не-AI/ML роли оценивай как обычно, без бонуса.
-"""
-
-
-# ============================================================
 # LLM-классификатор.
 # ============================================================
-def is_relevant(vacancy, kz_priority=False):
-    system = """Ты — ассистент, помогающий ML/AI Project Manager оценивать релевантность вакансий с hh.ru.
+def is_relevant(vacancy):
+    system = """Ты — ассистент, помогающий руководителю отдела продаж оценивать релевантность вакансий с hh.ru.
 
 Твоя задача — для каждой вакансии вернуть СТРОГО валидный JSON с оценкой релевантности.
 
@@ -604,141 +474,88 @@ def is_relevant(vacancy, kz_priority=False):
 
 === КАК ОЦЕНИВАТЬ ===
 
-Шаг 1. Определи tier:
-  - "tier_1": AI / ML / NLP / LLM / RAG / GenAI / Computer Vision; а также
-    hands-on AI/LLM роли (prompt engineering, создание бенчмарков, разметка
-    данных / AI-тренинг, асессоры / оценка LLM)
-  - "tier_2": HR-tech, IT/SaaS, продуктовые компании, цифровая трансформация, UX-research в продуктовом контексте
-  - "tier_3": финтех, банки, EdTech, e-commerce, прочий IT
-  - "out_of_scope": не IT или роль из hard NO
+Шаг 1. Определи tier (по отрасли/домену компании):
+  - "tier_1": IT / SaaS / системная интеграция / интернет-компании / tech
+  - "tier_2": финтех, телеком, digital, консалтинг, услуги для бизнеса
+  - "tier_3": прочий B2B (производство, оптовая торговля и т.п.)
+  - "out_of_scope": роль из hard NO (не-руководящая, не-sales, HoReCa и т.д.)
 
 Шаг 2. Hard NO признаки → decision="no", score=0-2:
-  - 1С (любые роли)
-  - чистые продажи / sales / аккаунт-менеджмент
-  - дизайн / арт-директор / UX-lead
-  - чистая разработка: backend/frontend/data engineer/ML engineer → NO даже
-    с AI в названии. Это НЕ относится к prompt eng / разметке / асессорам /
-    бенчмаркам — те OK.
-  - HR-роли как основная функция (рекрутер, HRD, HR BP, T&D) → NO.
-    ИСКЛЮЧЕНИЕ: IT/продуктовая роль, где HR-функции второстепенны или это
-    HR-tech продукт (People Ops в IT-компании, продакт HR-tech, операционная
-    роль с частью по людям в IT) → оценивать как IT/продуктовую роль, не
-    отклонять. Граница: отклоняем, если это HR-РОЛЬ; принимаем, если это
-    IT/продуктовая роль с HR-довеском.
-  - маркетинг / SMM / контент-менеджер
-  - junior / стажировка / без опыта → NO, КРОМЕ hands-on AI/LLM ролей
-    (prompt engineering, бенчмарки, разметка данных/AI-тренинг, асессор LLM) —
-    для них грейд не важен, junior и без опыта OK.
-  - C-level в крупной корпорации
+  - рядовой менеджер по продажам / sales manager БЕЗ управления командой —
+    это НЕ руководящая роль. "Менеджер по продажам", "специалист по продажам",
+    "менеджер по работе с клиентами" без подчинённых → NO.
+  - junior / стажёр / без опыта / любая не-руководящая позиция
+  - не-sales роли: разработка, аналитика, бухгалтерия, юристы, дизайн,
+    маркетинг/SMM, HR, поддержка — всё, что не про управление продажами
+  - HoReCa (рестораны / бары / кафе) — даже руководитель отдела продаж в HoReCa
+  - детейлинг / автомойки
 
-Шаг 3. Позитивные сигналы:
-  - PM, Product Manager, Project Manager, Product Owner, ML PM, AI PM, Program Manager, Delivery Manager, Scrum Master, Руководитель проектов/продукта
-  - AI/ML/NLP/LLM/RAG в требованиях
-  - product/project ownership, requirements, Agile/Scrum
-  - грейд middle / middle+ / senior
+Шаг 3. Позитивные сигналы (руководящая sales-роль):
+  - Руководитель отдела продаж (РОП), Head of Sales, Директор по продажам,
+    Коммерческий директор, Руководитель направления/группы продаж,
+    Business Development Manager, Sales Lead/Head/Director
+  - построение отдела продаж с нуля, KPI, системы мотивации, найм и обучение
+    команды продаж, внедрение CRM (AmoCRM), управление воронкой
+  - B2B-продажи, переговоры, ценообразование, SWOT / конкурентная разведка
+  - наличие подчинённых / управление командой
 
-Шаг 4. Lead/head-of роли:
-  - "Head of AI Projects", "COO в AI-стартапе", "Lead PM в небольшой команде" — OK
-  - "Head of Product в Сбере", "Director of PMO" — NO
-  - крупная корп: банки топ-20, телеком, ритейл-гиганты, госкомпании
-
-Шаг 4b. Операционные директорские роли (COO / операционный / исполнительный директор):
-  - Оценивай по СОДЕРЖАНИЮ роли, не по титулу.
-  - OK ТОЛЬКО при наличии IT/продуктового/диджитал контекста: операционное
-    управление, процессы, продукт, проекты, кросс-функциональная координация,
-    управление командами — пересечение с PM/Project/Product В IT/продуктовой среде.
-  - NO: операционка ВНЕ IT (производство, логистика, ритейл, стройка,
-    госструктуры без диджитал-составляющей) → отклоняй, даже если титул COO /
-    операционный / исполнительный директор и есть управление процессами и
-    командами; без IT/продуктового контекста это out_of_scope.
-  - NO также: чисто финансовый профиль (CFO-типаж), технический директор с наймом
-    инженеров, представительский C-level без операционки.
-  - UX Researcher: релевантно ТОЛЬКО при наличии product/PM/discovery-компонента.
-    Чистый UX-research или дизайн-уклон → maybe/no.
+Шаг 4. ГРЕЙД — критично отличать руководящую роль от рядовой:
+  - РОП / Head of Sales / Директор по продажам / Коммерческий директор /
+    руководитель направления продаж → руководящая, ДА.
+  - "Менеджер по продажам" / "специалист по продажам" без управления командой
+    → рядовая, НЕТ (даже если B2B и крутой продукт).
+  - Если из описания видно управление командой/отделом, KPI команды, найм
+    продавцов — это руководящая роль, принимаем, даже если в заголовке просто
+    "Sales Manager".
 
 Шаг 5. match_score 0-10:
-  - 9-10: tier_1 + middle/senior PM + стартап/продуктовая
-  - 7-8: tier_1 + PM, ИЛИ tier_2 + явная PM
-  - 5-6: tier_2/tier_3 + PM, без red flags
-  - 3-4: пограничная зона
-  - 0-2: hard NO либо явное несоответствие
+  - 9-10: руководящая sales-роль в tier_1 (IT/SaaS/интеграция/tech)
+  - 7-8: руководящая sales-роль в tier_1, ИЛИ явная руководящая в tier_2
+  - 5-6: руководящая sales-роль в tier_2/tier_3, без red flags
+  - 3-4: пограничная зона (грейд неясен / гибридная роль)
+  - 0-2: hard NO (рядовой, не-sales, HoReCa, детейлинг и т.д.)
 
 Шаг 6. decision: "yes" — score >= 7, "maybe" — 5-6, "no" — <= 4
 
 === FEW-SHOT ===
 
 Пример 1:
-Вакансия: "ML Project Manager — внедрение LLM в банке"
-Ответ: {"decision": "yes", "match_score": 10, "tier": "tier_1", "concerns": [], "reason": "Прямое попадание: ML PM с LLM/RAG в банке."}
+Вакансия: "Руководитель отдела продаж в IT-интегратора"
+Ответ: {"decision": "yes", "match_score": 9, "tier": "tier_1", "concerns": [], "reason": "Руководящая sales-роль в системной интеграции — прямое попадание."}
 
 Пример 2:
-Вакансия: "COO ИИ / Руководитель проектов в ИИ образовательной сфере"
-Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": ["COO формально C-level, но в стартапе на 15 чел. это операционный руководитель"], "reason": "AI EdTech стартап + руководство проектами."}
+Вакансия: "Коммерческий директор SaaS-платформы"
+Ответ: {"decision": "yes", "match_score": 9, "tier": "tier_1", "concerns": [], "reason": "Коммерческий директор в SaaS — руководящая роль в tier_1."}
 
 Пример 3:
-Вакансия: "Аккаунт менеджер / Менеджер проектов (IT)"
-Ответ: {"decision": "maybe", "match_score": 5, "tier": "tier_3", "concerns": ["Гибрид аккаунт+PM"], "reason": "Половина продажи (hard NO), половина IT PM."}
+Вакансия: "Директор по продажам в логистическую компанию"
+Ответ: {"decision": "yes", "match_score": 6, "tier": "tier_3", "concerns": ["Отрасль вне IT"], "reason": "Руководящая sales-роль, но прочий B2B — ниже приоритет."}
 
 Пример 4:
-Вакансия: "Ведущий аналитик 1С"
-Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Стек 1С — hard NO"], "reason": "1С-направление."}
+Вакансия: "Менеджер по продажам"
+Ответ: {"decision": "no", "match_score": 2, "tier": "out_of_scope", "concerns": ["Нет признаков управления командой"], "reason": "Рядовая sales-роль, не руководящая."}
 
 Пример 5:
-Вакансия: "Product Manager в e-commerce маркетплейс"
-Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_3", "concerns": [], "reason": "PM в продуктовой компании с метриками и A/B."}
+Вакансия: "Руководитель отдела продаж в сеть ресторанов"
+Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["HoReCa"], "reason": "Руководящая, но отрасль HoReCa — hard NO."}
 
 Пример 6:
-Вакансия: "Арт-директор"
-Ответ: {"decision": "no", "match_score": 0, "tier": "out_of_scope", "concerns": ["Дизайн — hard NO"], "reason": "Дизайн-руководство."}
+Вакансия: "Backend-разработчик"
+Ответ: {"decision": "no", "match_score": 0, "tier": "out_of_scope", "concerns": ["Не sales"], "reason": "Техническая роль, не про управление продажами."}
 
 Пример 7:
-Вакансия: "Операционный директор / COO в AI-стартапе (20 чел)"
-Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": [], "reason": "Операционное управление в AI-стартапе, пересечение с PM."}
+Вакансия: "Head of Sales в B2B SaaS-стартап"
+Ответ: {"decision": "yes", "match_score": 9, "tier": "tier_1", "concerns": [], "reason": "Руководитель продаж в B2B SaaS — целевая роль в tier_1."}
 
 Пример 8:
-Вакансия: "UX Researcher в продуктовую команду финтеха"
-Ответ: {"decision": "yes", "match_score": 6, "tier": "tier_2", "concerns": ["UX-research как смежная роль"], "reason": "Продуктовый research-контекст, пересечение с CustDev."}
-
-Пример 9:
-Вакансия: "Исполнительный директор завода металлоконструкций"
-Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Производство без продукта"], "reason": "Операционка вне IT/продукта."}
-
-Пример 10:
-Вакансия: "Операционный директор сети розничных магазинов"
-Ответ: {"decision": "no", "match_score": 2, "tier": "out_of_scope", "concerns": ["Операционка вне IT/продукта"], "reason": "Ритейл-операционка без IT/продуктового контекста."}
-
-Пример 11:
-Вакансия: "People Operations Manager в IT-стартапе"
-Ответ: {"decision": "maybe", "match_score": 6, "tier": "tier_2", "concerns": ["HR-функции, но в IT-продуктовой команде"], "reason": "Операционная роль в IT с частью по людям, не чистый HR."}
-
-Пример 12:
-Вакансия: "HR Business Partner в банке"
-Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Чистая HR-роль"], "reason": "HR как основная функция — hard NO."}
-
-Пример 13:
-Вакансия: "Prompt Engineer (опыт не требуется)"
-Ответ: {"decision": "yes", "match_score": 8, "tier": "tier_1", "concerns": ["Hands-on AI, грейд не важен"], "reason": "Prompt engineering — целевая AI/LLM роль."}
-
-Пример 14:
-Вакансия: "Асессор для оценки ответов нейросети"
-Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_1", "concerns": [], "reason": "Оценка LLM — целевая hands-on AI роль."}
-
-Пример 15:
-Вакансия: "Разметчик данных для обучения моделей"
-Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_1", "concerns": ["Junior-уровень OK для AI-разметки"], "reason": "AI-тренинг/разметка — целевая категория."}
-
-Пример 16:
-Вакансия: "Junior Backend Developer в AI-команду"
-Ответ: {"decision": "no", "match_score": 1, "tier": "out_of_scope", "concerns": ["Чистая разработка"], "reason": "Backend-разработка — hard NO даже в AI-команде."}
+Вакансия: "Руководитель отдела продаж B2B (телеком)"
+Ответ: {"decision": "yes", "match_score": 7, "tier": "tier_2", "concerns": [], "reason": "Руководящая B2B-роль в телекоме — tier_2."}
 
 === ФОРМАТ ОТВЕТА ===
 
 Верни СТРОГО JSON без markdown:
 {"decision": "yes"|"maybe"|"no", "match_score": <0-10>, "tier": "tier_1"|"tier_2"|"tier_3"|"out_of_scope", "concerns": [...], "reason": "..."}
 """
-
-    if kz_priority:
-        system += KZ_PRIORITY_NOTE
 
     user = f"""Вакансия: {vacancy['name']}
 Компания: {vacancy.get('employer', {}).get('name', '')}
@@ -905,7 +722,6 @@ def main():
     skipped_by_prefilter = []
     skipped_by_geo = []
     skipped_by_company = []
-    skipped_by_salary = []
     error_samples = []
     seen_ids = set()
 
@@ -924,32 +740,15 @@ def main():
         "applied_success": 0,
         "applied_failed": 0,
         "applied_already": 0,
-        # ── ветка Алматы (подмножество счётчиков выше, для видимости) ──
-        "almaty_fetched": 0,
-        "almaty_salary_rejected": 0,
-        "almaty_llm_approved": 0,
     }
 
     captcha_hit = False
 
-    # План поиска: сначала ветка Алматы (area=160), затем московская
-    # (area=None). Алматы идёт первой, чтобы успеть отработать до того,
-    # как капча (прилетает ~раз в 3 дня) прервёт прогон на московской части
-    # и оставит kz-счётчики нулевыми. Флаг is_almaty управляет гео-стадией,
-    # зарплатным фильтром и приоритетом AI/ML в промпте.
-    search_plan = (
-        [(s, ALMATY_AREA_ID, True) for s in SEARCHES_ALMATY]
-        + [(s, None, False) for s in SEARCHES]
-    )
-
     try:
-        for search, area, is_almaty in search_plan:
-            label = " (Алматы)" if is_almaty else ""
-            print(f"\n🔍 Ищем: {search}{label}")
-            vacancies = get_vacancies(search, area=area)
+        for search in SEARCHES:
+            print(f"\n🔍 Ищем: {search}")
+            vacancies = get_vacancies(search)
             funnel["fetched_total"] += len(vacancies)
-            if is_almaty:
-                funnel["almaty_fetched"] += len(vacancies)
 
             for v in vacancies:
                 if v['id'] in seen_ids:
@@ -970,27 +769,15 @@ def main():
                     })
                     continue
 
-                if is_almaty:
-                    # Алматы НЕ режем РФ-geo_filter'ом — вместо него KZT-фильтр.
-                    salary_result, salary_reason = almaty_salary_filter(v)
-                    if salary_result == "reject":
-                        funnel["almaty_salary_rejected"] += 1
-                        skipped_by_salary.append({
-                            "name": v['name'],
-                            "employer": v.get('employer', {}).get('name', ''),
-                            "reason": salary_reason
-                        })
-                        continue
-                else:
-                    geo_result, geo_reason = geo_filter(v)
-                    if geo_result == "reject":
-                        funnel["geo_rejected"] += 1
-                        skipped_by_geo.append({
-                            "name": v['name'],
-                            "area": v.get('area', {}).get('name', ''),
-                            "reason": geo_reason
-                        })
-                        continue
+                geo_result, geo_reason = geo_filter(v)
+                if geo_result == "reject":
+                    funnel["geo_rejected"] += 1
+                    skipped_by_geo.append({
+                        "name": v['name'],
+                        "area": v.get('area', {}).get('name', ''),
+                        "reason": geo_reason
+                    })
+                    continue
 
                 prefilter_result, prefilter_reason = prefilter_by_title(v['name'])
                 if prefilter_result == "reject":
@@ -1013,7 +800,7 @@ def main():
                     funnel["detail_fetch_failed"] += 1
                     continue
 
-                is_match, classification = is_relevant(detail, kz_priority=is_almaty)
+                is_match, classification = is_relevant(detail)
 
                 log_prefix = (
                     f"[score={classification['match_score']}, "
@@ -1023,8 +810,6 @@ def main():
 
                 if is_match:
                     funnel["llm_approved"] += 1
-                    if is_almaty:
-                        funnel["almaty_llm_approved"] += 1
                     print(f"✅ Подходит {log_prefix}: {v['name']} — {v.get('employer', {}).get('name', '')}")
                     print(f"   reason: {classification['reason']}")
                     if classification['concerns']:
@@ -1109,10 +894,6 @@ def main():
     print(f"  Откликов отправлено:       {funnel['applied_success']}")
     print(f"  «Уже откликались» (heal):  {funnel['applied_already']}")
     print(f"  Ошибок отклика:            {funnel['applied_failed']}")
-    print(f"  ────────────────────────────")
-    print(f"  🇰🇿 Алматы — получено:      {funnel['almaty_fetched']}")
-    print(f"  🇰🇿 Алматы — отсеяно по KZT: -{funnel['almaty_salary_rejected']}")
-    print(f"  🇰🇿 Алматы — LLM одобрила:   {funnel['almaty_llm_approved']}")
 
     print("\n" + "=" * 60)
     print("📊 ИТОГ ПО ОТКЛИКАМ:")
@@ -1146,11 +927,6 @@ def main():
         geo_counts = Counter(s['area'] for s in skipped_by_geo)
         for area, cnt in geo_counts.most_common(10):
             print(f"  [{cnt}x] {area}")
-
-    print(f"\n🔴 Алматы — отсев по KZT-зарплате: {len(skipped_by_salary)}")
-    if skipped_by_salary:
-        for s in skipped_by_salary[:10]:
-            print(f"  • {s['name']} — {s['employer']} ({s['reason']})")
 
     print(f"\n🔴 Префильтр: {len(skipped_by_prefilter)}")
     if skipped_by_prefilter:

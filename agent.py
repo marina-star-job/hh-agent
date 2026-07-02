@@ -40,6 +40,9 @@ Hard NO:
   - рядовой менеджер по продажам / клиентский менеджер (не руководитель)
   - junior / стажёр / без опыта / не-руководящие позиции
   - узкотехнические роли (разработка, аналитика, бухгалтерия, юристы)
+  - не целевые роли (не про построение sales-команд): менеджер по работе с
+    маркетплейсами, руководитель тендерного отдела / тендерный отдел,
+    операционный директор маркетплейсов
   - HoReCa (рестораны / бары / кафе) — единственное исключение по отрасли
   - детейлинг / автомойки — единственное исключение по отрасли
 """.strip()
@@ -116,29 +119,71 @@ def company_filter(vacancy):
 
 
 # ============================================================
-# Гео-фильтр (переработан под sales-lead).
-# Правило:
-#   Москва (area id=1)             → pass при ЛЮБОМ формате.
-#   Прочие регионы РФ / ближнее МО → pass ТОЛЬКО если формат remote.
-#   Казахстан / Кыргызстан         → pass ТОЛЬКО если формат remote.
-#   Любая другая страна            → reject.
+# Гео-фильтр (сужен: только Москва + топ-5 городов РФ + KZ/KG).
+# Правило (определяется по ГОРОДУ/area, не по стране):
+#   Москва (area id=1)                     → pass при ЛЮБОМ формате.
+#   СПб / Новосибирск / Екатеринбург /
+#   Казань / Нижний Новгород               → pass ТОЛЬКО если формат remote.
+#   Казахстан / Кыргызстан                 → pass ТОЛЬКО если формат remote.
+#   Прочие города РФ (даже remote),
+#   любая другая страна (напр. Ташкент/УЗ) → reject.
 #
 # Формат работы (remote) надёжно есть только в деталях вакансии
 # (get_vacancy_detail), а не всегда в списке. Поэтому проверка формата
 # вынесена на стадию ПОСЛЕ get_vacancy_detail (geo_remote_gate). На стадии
-# списка geo_filter решает лишь по стране: Москва (pass), допустимая страна
-# вне Москвы (defer — ждём формат из деталей), недопустимая страна (reject).
+# списка geo_filter решает по городу/стране: Москва (pass), топ-5 РФ / KZ / KG
+# (defer — ждём формат из деталей), всё остальное (reject).
 # Так поиск и воронка не переписываются, московская ветка не меняется, а
 # формат берётся из надёжного источника.
 #
 # Country/area ID проверены через https://api.hh.ru/areas (2026-07-01):
 #   Россия=113, Казахстан=40, Кыргызстан=48 (НЕ 28 — 28 это Грузия), Москва=1.
+#   Города РФ: СПб=2, Екатеринбург=3, Новосибирск=4, Нижний Новгород=66, Казань=88.
 # ============================================================
 MOSCOW_AREA_ID = "1"
 RUSSIA_COUNTRY_ID = "113"
 KZ_COUNTRY_ID = "40"
 KG_COUNTRY_ID = "48"
-GEO_ALLOWED_COUNTRY_IDS = {RUSSIA_COUNTRY_ID, KZ_COUNTRY_ID, KG_COUNTRY_ID}
+
+# Топ-5 городов РФ, из которых пропускаем ТОЛЬКО remote (по area id + имени).
+# Все прочие города РФ режутся, даже если формат remote.
+REMOTE_RF_CITY_IDS = {"2", "3", "4", "66", "88"}
+REMOTE_RF_CITY_NAMES = {
+    "санкт-петербург",
+    "новосибирск",
+    "екатеринбург",
+    "казань",
+    "нижний новгород",
+}
+
+# Страны (кроме РФ), из которых пропускаем ТОЛЬКО remote. РФ намеренно НЕ здесь:
+# для РФ проходят лишь города из REMOTE_RF_CITY_* (не вся страна).
+GEO_ALLOWED_COUNTRY_IDS = {KZ_COUNTRY_ID, KG_COUNTRY_ID}
+
+
+# ============================================================
+# SEARCH_PLAN — порядок прогона. МОСКВА ПЕРВОЙ (главный рынок кандидата):
+# captcha прерывает прогон в середине, поэтому Москва должна отработать до
+# всего остального. Затем remote-регионы РФ (nationwide-поиск api.hh.ru; из
+# них geo_filter оставит только топ-5 городов), затем Казахстан и Киргизия
+# (нужен явный area — nationwide РФ их не возвращает).
+# Каждый элемент — (search_text, area | None). Порядок: Москва → РФ remote →
+# KZ → KG. Дубликаты между фазами отсекаются seen_ids.
+# ============================================================
+SEARCH_PLAN = (
+    [(s, MOSCOW_AREA_ID) for s in SEARCHES]      # 1. Москва — первой, любой формат
+    + [(s, None) for s in SEARCHES]              # 2. remote-регионы РФ (топ-5 через geo)
+    + [(s, KZ_COUNTRY_ID) for s in SEARCHES]     # 3. Казахстан — только remote
+    + [(s, KG_COUNTRY_ID) for s in SEARCHES]     # 4. Киргизия — только remote
+)
+
+# Ярлык фазы для логов (area id -> человекочитаемое имя).
+AREA_LABELS = {
+    None: "РФ remote",
+    MOSCOW_AREA_ID: "Москва",
+    KZ_COUNTRY_ID: "Казахстан",
+    KG_COUNTRY_ID: "Киргизия",
+}
 
 _area_to_country = None
 
@@ -194,13 +239,22 @@ def _is_moscow(area):
     return str(area_id) == MOSCOW_AREA_ID or "москва" in area_name
 
 
+def _is_remote_allowed_rf_city(area):
+    """True, если area — один из топ-5 городов РФ, откуда пропускаем remote
+    (СПб / Новосибирск / Екатеринбург / Казань / Нижний Новгород).
+    Проверяем и по area id, и по имени."""
+    area_id = str(area.get("id") or "")
+    area_name = (area.get("name") or "").strip().lower()
+    return area_id in REMOTE_RF_CITY_IDS or area_name in REMOTE_RF_CITY_NAMES
+
+
 def geo_filter(vacancy):
-    """Стадия списка — решение по стране, без формата.
+    """Стадия списка — решение по городу/стране, без формата.
     Возвращает (result, reason):
       "pass"   — Москва: проходит при любом формате.
-      "defer"  — допустимая страна (РФ/КЗ/КГ) вне Москвы: нужен remote,
+      "defer"  — топ-5 городов РФ / КЗ / КГ: нужен remote,
                  финальное решение примет geo_remote_gate после деталей.
-      "reject" — недопустимая страна.
+      "reject" — прочие города РФ, любая другая страна (напр. Ташкент/УЗ).
     """
     area = vacancy.get("area", {}) or {}
     area_id = area.get("id")
@@ -209,27 +263,28 @@ def geo_filter(vacancy):
         return "pass", None
     if _is_moscow(area):
         return "pass", None
-    country = area_country_id(area_id)
-    if country is None:
-        # карта не загрузилась либо неизвестный area — не режем на списке,
-        # даём деталям решить по формату (мягкая деградация).
+    if _is_remote_allowed_rf_city(area):
         return "defer", None
+    country = area_country_id(area_id)
     if country in GEO_ALLOWED_COUNTRY_IDS:
         return "defer", None
-    return "reject", f"страна вне scope: {area_name}"
+    return "reject", f"вне scope (не Москва / не топ-5 РФ / не KZ-KG): {area_name}"
 
 
 def geo_remote_gate(detail):
     """Стадия после деталей для defer-вакансий. Москва — pass при любом
-    формате (safety-net); РФ-регионы / КЗ / КГ — pass только при remote;
-    недопустимая страна — reject; вне Москвы без remote — reject."""
+    формате (safety-net); топ-5 городов РФ / КЗ / КГ — pass только при remote;
+    всё прочее — reject; допустимый город/страна без remote — reject."""
     area = detail.get("area", {}) or {}
     area_name = (area.get("name") or "").strip()
     if _is_moscow(area):
         return "pass", None
-    country = area_country_id(area.get("id"))
-    if country is not None and country not in GEO_ALLOWED_COUNTRY_IDS:
-        return "reject", f"страна вне scope: {area_name}"
+    allowed = (
+        _is_remote_allowed_rf_city(area)
+        or area_country_id(area.get("id")) in GEO_ALLOWED_COUNTRY_IDS
+    )
+    if not allowed:
+        return "reject", f"вне scope (не Москва / не топ-5 РФ / не KZ-KG): {area_name}"
     if is_remote_format(detail):
         return "pass", None
     return "reject", f"вне Москвы без remote: {area_name}"
@@ -276,6 +331,9 @@ TITLE_BLACKLIST = [
     r"\bбухгалтер\b",
     r"\bюрист\b",
     r"\bдизайнер\b",
+    # Не целевые роли (не про построение sales-команд) — см. is_relevant:
+    r"\bмаркетплейс",   # менеджер по работе с маркетплейсами, операционный директор маркетплейсов
+    r"\bтендерн",       # руководитель тендерного отдела / тендерный отдел
 ]
 
 
@@ -542,6 +600,10 @@ def is_relevant(vacancy):
   - junior / стажёр / без опыта / любая не-руководящая позиция
   - не-sales / не-CS роли: разработка, аналитика, бухгалтерия, юристы, дизайн,
     маркетинг/SMM, HR — всё, что не про управление продажами или клиентским сервисом
+  - НЕ ЦЕЛЕВЫЕ РОЛИ (не про построение sales-команд) → out_of_scope, decision="no":
+    "менеджер по работе с маркетплейсами", "руководитель тендерного отдела" /
+    "тендерный отдел", "операционный директор маркетплейсов". Это управление
+    закупками/тендерами/каналом маркетплейсов, а не построение отдела продаж.
   - ИСКЛЮЧЕНИЕ ПО ОТРАСЛИ (единственное): HoReCa (рестораны / бары / кафе) и
     детейлинг / автомойки → hard NO даже для руководящей роли.
 
@@ -795,9 +857,9 @@ def main():
     captcha_hit = False
 
     try:
-        for search in SEARCHES:
-            print(f"\n🔍 Ищем: {search}")
-            vacancies = get_vacancies(search)
+        for search, area in SEARCH_PLAN:
+            print(f"\n🔍 Ищем: {search} [{AREA_LABELS.get(area, area)}]")
+            vacancies = get_vacancies(search, area=area)
             funnel["fetched_total"] += len(vacancies)
 
             for v in vacancies:

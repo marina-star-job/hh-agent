@@ -9,16 +9,29 @@ jobs:
   update_resumes:
     runs-on: ubuntu-latest
     steps:
+      # Версия зафиксирована: в 2.x поменялся формат хранения токена
+      # (config.json -> token.json), из-за чего job молча перестал работать.
       - name: Install hh-applicant-tool
-        run: pip install hh-applicant-tool
+        run: pip install "hh-applicant-tool==2.5.4"
 
-      - name: Write hh config
+      # hh-applicant-tool 2.x читает токен из token.json.
+      # access_expires_at не передаём: тогда при 403 инструмент сам
+      # попробует обновить access-токен через refresh-токен.
+      - name: Write hh token
         run: |
           mkdir -p ~/.config/hh-applicant-tool
-          echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/config.json
+          echo '{"token":{"access_token":"${{ secrets.HH_ACCESS_TOKEN }}","refresh_token":"${{ secrets.HH_REFRESH_TOKEN }}"}}' > ~/.config/hh-applicant-tool/token.json
 
+      # Раньше цикл заканчивался на `sleep 10`, который возвращает 0,
+      # поэтому job был зелёным даже когда все 3 попытки падали.
       - name: Update resumes
         run: |
           for i in 1 2 3; do
-            hh-applicant-tool update-resumes && break || sleep 10
+            if hh-applicant-tool update-resumes; then
+              exit 0
+            fi
+            echo "Попытка $i не удалась"
+            sleep 10
           done
+          echo "::error::Не удалось поднять резюме за 3 попытки — вероятно, протух токен hh"
+          exit 1

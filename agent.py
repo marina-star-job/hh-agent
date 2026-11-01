@@ -287,26 +287,43 @@ def _is_remote_allowed_rf_city(area):
     return area_id in REMOTE_RF_CITY_IDS or area_name in REMOTE_RF_CITY_NAMES
 
 
+def has_format_info(vacancy):
+    """True, если в вакансии (в т.ч. в элементе выдачи поиска) указан формат
+    работы — schedule.id или непустой work_format."""
+    schedule = vacancy.get("schedule") or {}
+    return bool(schedule.get("id")) or bool(vacancy.get("work_format"))
+
+
 def geo_filter(vacancy):
-    """Стадия списка — решение по городу/стране, без формата.
+    """Стадия списка — решение по городу/стране и, если он уже известен,
+    по формату работы.
     Возвращает (result, reason):
       "defer"  — Москва / топ-5 городов РФ / КЗ / КГ: нужен remote,
                  финальное решение примет geo_remote_gate после деталей.
-      "reject" — прочие города РФ, любая другая страна (напр. Ташкент/УЗ).
+      "reject" — прочие города РФ, любая другая страна (напр. Ташкент/УЗ),
+                 а также допустимый город, если выдача поиска уже говорит,
+                 что формат не удалённый.
+
+    С 2026-11-01 формат проверяем уже по выдаче поиска: schedule / work_format
+    там есть (подтверждено HH Diag). Так не-удалённые вакансии отсекаются
+    без запроса деталей — в первом прогоне 69 из ~100 запросов деталей ушли
+    на не-удалёнку, и hh выдал капчу. Если формата в выдаче нет — решение
+    по-прежнему принимает geo_remote_gate после деталей.
     """
     area = vacancy.get("area", {}) or {}
     area_id = area.get("id")
     area_name = (area.get("name") or "").strip()
-    if area_id is None and not area_name:
-        return "defer", None
-    if _is_moscow(area):
-        return "defer", None
-    if _is_remote_allowed_rf_city(area):
-        return "defer", None
-    country = area_country_id(area_id)
-    if country in GEO_ALLOWED_COUNTRY_IDS:
-        return "defer", None
-    return "reject", f"вне scope (не Москва / не топ-5 РФ / не KZ-KG): {area_name}"
+    allowed = (
+        (area_id is None and not area_name)
+        or _is_moscow(area)
+        or _is_remote_allowed_rf_city(area)
+        or area_country_id(area_id) in GEO_ALLOWED_COUNTRY_IDS
+    )
+    if not allowed:
+        return "reject", f"вне scope (не Москва / не топ-5 РФ / не KZ-KG): {area_name}"
+    if has_format_info(vacancy) and not is_remote_format(vacancy):
+        return "reject", f"не remote (по выдаче поиска): {area_name or 'город не указан'}"
+    return "defer", None
 
 
 def geo_remote_gate(detail):

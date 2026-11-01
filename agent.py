@@ -5,10 +5,44 @@ import requests
 import time
 import json
 import base64
+import string
+import uuid
 from collections import Counter
 from datetime import datetime
 
 HH_TOKEN = os.environ['HH_ACCESS_TOKEN']
+
+
+# ============================================================
+# Заголовки запросов к api.hh.ru — как у официального Android-приложения
+# (так же делает hh-applicant-tool 2.x).
+# С лета 2026 hh отдаёт /vacancies/{id} с обычным python-клиентом только
+# через captcha_required, а с этими заголовками — без капчи (проверено
+# диагностикой HH Diag 2026-11-01). Анонимные запросы (без токена) hh
+# теперь отбивает 403, поэтому токен нужен и для поиска.
+# User-Agent генерируется один раз на прогон — одна «сессия устройства».
+# ============================================================
+def _android_user_agent():
+    model = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+    return (
+        f"ru.hh.android/7.{random.randint(100, 150)}.{random.randint(10000, 15000)}, "
+        f"Device: {model}, Android OS: {random.randint(11, 15)} (UUID: {uuid.uuid4()})"
+    )
+
+
+HH_USER_AGENT = _android_user_agent()
+
+
+def hh_headers(**extra):
+    headers = {
+        "Accept": "application/json",
+        "X-Force-App-Access": "true",
+        "X-HH-App-Active": "true",
+        "User-Agent": HH_USER_AGENT,
+        "Authorization": f"Bearer {HH_TOKEN}",
+    }
+    headers.update(extra)
+    return headers
 GPT_TOKEN = os.environ['GPT_MODELS_TOKEN']
 GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
 REPO = os.environ['GITHUB_REPOSITORY']
@@ -203,8 +237,7 @@ def _load_area_country_map():
         return _area_to_country
     mapping = {}
     try:
-        headers = {"Authorization": f"Bearer {HH_TOKEN}"}
-        r = requests.get("https://api.hh.ru/areas", headers=headers, timeout=30)
+        r = requests.get("https://api.hh.ru/areas", headers=hh_headers(), timeout=30)
         if r.status_code == 200:
             def walk(node, country_id):
                 mapping[str(node["id"])] = country_id
@@ -438,7 +471,7 @@ def get_vacancies(search, area=None):
         }
         if area is not None:
             params["area"] = area
-        headers = {"Authorization": f"Bearer {HH_TOKEN}"}
+        headers = hh_headers()
 
         page_items = []
         for attempt in range(3):
@@ -479,7 +512,7 @@ def get_vacancies(search, area=None):
 def get_vacancy_detail(vacancy_id):
     """Детали вакансии с retry на 4xx/5xx и captcha detection."""
     url = f"https://api.hh.ru/vacancies/{vacancy_id}"
-    headers = {"Authorization": f"Bearer {HH_TOKEN}"}
+    headers = hh_headers()
 
     for attempt in range(3):
         try:
@@ -819,10 +852,7 @@ def write_cover_letter(vacancy):
 # ============================================================
 def apply(vacancy_id, resume_id, cover_letter):
     url = "https://api.hh.ru/negotiations"
-    headers = {
-        "Authorization": f"Bearer {HH_TOKEN}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
+    headers = hh_headers(**{"Content-Type": "application/x-www-form-urlencoded"})
     data = {
         "vacancy_id": vacancy_id,
         "resume_id": resume_id,
@@ -849,8 +879,7 @@ def apply(vacancy_id, resume_id, cover_letter):
 
 def get_resume_id():
     url = "https://api.hh.ru/resumes/mine"
-    headers = {"Authorization": f"Bearer {HH_TOKEN}"}
-    r = requests.get(url, headers=headers)
+    r = requests.get(url, headers=hh_headers(), timeout=30)
     if is_captcha_response(r.text):
         raise CaptchaRequiredError("captcha при get_resume_id")
     resumes = r.json().get("items", [])
@@ -868,10 +897,12 @@ def main():
     except CaptchaRequiredError as e:
         print(f"🛑 {e}")
         print("🛑 hh заблокировал на этапе get_resume_id. Прогон прерван.")
+        print(f"::error title=Captcha::{e}")
         return 1
 
     if not resume_id:
         print("Резюме не найдено!")
+        print("::error title=Резюме не найдено::вероятно, протух HH_ACCESS_TOKEN")
         return 1
 
     applied_ids, sha = get_applied_ids()
@@ -1036,6 +1067,7 @@ def main():
         print(f"\n🛑 CIRCUIT BREAKER: {e}")
         print(f"🛑 hh anti-fraud сработал. Прогон прерван, чтобы не усугублять блокировку.")
         print(f"🛑 Уже отправленные {funnel['applied_success']} откликов сохранены.")
+        print(f"::error title=Captcha::{e}")
         captcha_hit = True
 
     sha = save_applied_ids(applied_ids, sha)
@@ -1068,6 +1100,17 @@ def main():
     print(f"  Откликов отправлено:       {funnel['applied_success']}")
     print(f"  «Уже откликались» (heal):  {funnel['applied_already']}")
     print(f"  Ошибок отклика:            {funnel['applied_failed']}")
+
+    # Краткая сводка в аннотации запуска GitHub Actions — видна через API,
+    # даже когда сам лог недоступен.
+    print(
+        f"::notice title=Воронка::получено {funnel['fetched_total']}, "
+        f"свежих {fresh_vacancies}, гео -{funnel['geo_rejected']}, "
+        f"префильтр -{funnel['prefilter_rejected']}, "
+        f"LLM да {funnel['llm_approved']} / нет {funnel['llm_rejected']}, "
+        f"откликов {funnel['applied_success']}, ошибок {funnel['applied_failed']}"
+        + (" (прервано капчей)" if captcha_hit else "")
+    )
 
     print("\n" + "=" * 60)
     print("📊 ИТОГ ПО ОТКЛИКАМ:")

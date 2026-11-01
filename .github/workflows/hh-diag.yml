@@ -1,0 +1,64 @@
+name: HH Diag
+
+# Ручная диагностика: несколько одиночных запросов к api.hh.ru в разных
+# режимах (с токеном / без, разные User-Agent), чтобы понять, где hh требует
+# капчу. Результат пишется в аннотации запуска (::notice::), тело ответов и
+# токен не выводятся. Нагрузка — ~6 запросов с паузами.
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: pip install requests
+      - name: Probe hh API
+        env:
+          HH_ACCESS_TOKEN: ${{ secrets.HH_ACCESS_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import os, time, json, requests
+          TOKEN = os.environ["HH_ACCESS_TOKEN"]
+          BASE = "https://api.hh.ru"
+          APP_UA = "hh-agent/1.0 (marina-star-job)"
+          SEARCH = {"text": "руководитель отдела продаж", "area": 1, "period": 2, "per_page": 20}
+
+          def probe(label, path, params=None, token=False, ua=None):
+              h = {}
+              if token:
+                  h["Authorization"] = f"Bearer {TOKEN}"
+              if ua:
+                  h["User-Agent"] = ua
+                  h["HH-User-Agent"] = ua
+              try:
+                  r = requests.get(BASE + path, params=params, headers=h, timeout=30)
+                  body = r.text
+                  captcha = "captcha_required" in body
+                  err = ""
+                  try:
+                      j = r.json()
+                      errs = j.get("errors") or []
+                      if errs:
+                          err = ",".join(f"{e.get('type')}/{e.get('value')}" for e in errs)
+                      items = len(j.get("items", [])) if isinstance(j, dict) else 0
+                  except ValueError:
+                      j, items = {}, 0
+                  msg = f"{label}: HTTP {r.status_code} | captcha={captcha} | items={items} | errors={err or '-'}"
+              except Exception as e:
+                  msg, j = f"{label}: EXCEPTION {type(e).__name__}: {e}", {}
+              print(f"::notice::{msg}")
+              time.sleep(4)
+              return j
+
+          probe("1 resumes/mine [token, default UA]", "/resumes/mine", token=True)
+          s1 = probe("2 search [token, default UA] (как сейчас в агенте)", "/vacancies", SEARCH, token=True)
+          s2 = probe("3 search [no token, default UA]", "/vacancies", SEARCH)
+          s3 = probe("4 search [no token, app UA]", "/vacancies", SEARCH, ua=APP_UA)
+          vid = next((s.get("items", [{}])[0].get("id") for s in (s1, s2, s3) if s.get("items")), None)
+          if vid:
+              probe("5 detail [token, default UA] (как сейчас в агенте)", f"/vacancies/{vid}", token=True)
+              probe("6 detail [no token, app UA]", f"/vacancies/{vid}", ua=APP_UA)
+          else:
+              print("::notice::5-6 detail: пропущено — ни один поиск не вернул вакансий")
+          EOF

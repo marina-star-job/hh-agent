@@ -24,8 +24,18 @@ jobs:
           APP_UA = "hh-agent/1.0 (marina-star-job)"
           SEARCH = {"text": "руководитель отдела продаж", "area": 1, "period": 2, "per_page": 20}
 
-          def probe(label, path, params=None, token=False, ua=None):
-              h = {}
+          import random, string, uuid
+          def android_headers():
+              # Как в hh-applicant-tool 2.x (api/client.py + utils/user_agent.py)
+              model = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+              ua = (f"ru.hh.android/7.{random.randint(100,150)}.{random.randint(10000,15000)}, "
+                    f"Device: {model}, Android OS: {random.randint(11,15)} (UUID: {uuid.uuid4()})")
+              return {"Accept": "application/json", "X-Force-App-Access": "true",
+                      "X-HH-App-Active": "true", "User-Agent": ua}
+          ANDROID = android_headers()
+
+          def probe(label, path, params=None, token=False, ua=None, android=False):
+              h = dict(ANDROID) if android else {}
               if token:
                   h["Authorization"] = f"Bearer {TOKEN}"
               if ua:
@@ -51,14 +61,19 @@ jobs:
               time.sleep(4)
               return j
 
-          probe("1 resumes/mine [token, default UA]", "/resumes/mine", token=True)
-          s1 = probe("2 search [token, default UA] (как сейчас в агенте)", "/vacancies", SEARCH, token=True)
-          s2 = probe("3 search [no token, default UA]", "/vacancies", SEARCH)
-          s3 = probe("4 search [no token, app UA]", "/vacancies", SEARCH, ua=APP_UA)
-          vid = next((s.get("items", [{}])[0].get("id") for s in (s1, s2, s3) if s.get("items")), None)
-          if vid:
-              probe("5 detail [token, default UA] (как сейчас в агенте)", f"/vacancies/{vid}", token=True)
-              probe("6 detail [no token, app UA]", f"/vacancies/{vid}", ua=APP_UA)
+          # Раунд 2: заголовки Android-приложения (как hh-applicant-tool).
+          s1 = probe("A search [token, android headers]", "/vacancies", SEARCH, token=True, android=True)
+          items = s1.get("items") or []
+          if items:
+              it = items[0]
+              fields = sorted(k for k in it.keys())
+              print(f"::notice::A list-item fields: {','.join(fields)}")
+              print(f"::notice::A list-item sample: schedule={(it.get('schedule') or {}).get('id')} "
+                    f"work_format={[w.get('id') for w in (it.get('work_format') or [])]} "
+                    f"response_letter_required={it.get('response_letter_required')} has_test={it.get('has_test')}")
+              for n, v in enumerate(items[:3], 1):
+                  probe(f"B{n} detail [token, android headers]", f"/vacancies/{v['id']}", token=True, android=True)
+              probe("C detail [token, default UA] (как сейчас в агенте)", f"/vacancies/{items[0]['id']}", token=True)
           else:
-              print("::notice::5-6 detail: пропущено — ни один поиск не вернул вакансий")
+              print("::notice::A: поиск не вернул вакансий — detail-пробы пропущены")
           EOF
